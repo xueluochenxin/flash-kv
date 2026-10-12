@@ -1,0 +1,8 @@
+ 统一协议 
+ * SET key value //OK  WRONG
+ * GET key       //value INEXIST
+ * DEL key       //OK    INEXIST
+ * MOD key value //OK    INEXIST
+ * EXIST key     //YES   NO
+
+如果是无效输入   INVALIDE
