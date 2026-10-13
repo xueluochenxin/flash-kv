@@ -6,3 +6,12 @@
  * EXIST key     //YES   NO
 
 如果是无效输入   INVALIDE
+
+//尝试加入RESP规范
+*3\r\n
+$3\r\n
+SET\r\n
+$3\r\n
+Key\r\n
+$5\r\n
+Value\r\n
