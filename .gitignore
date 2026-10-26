@@ -1,0 +1,5 @@
+# 编译产物不入库，只提交源码与 Makefile
+*.o
+*.d
+flash_kv
+kvstore
