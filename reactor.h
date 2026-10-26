@@ -1,3 +1,5 @@
+#ifndef REACTOR_H
+#define REACTOR_H
 #include <stdio.h>      // printf, perror
 #include <stdlib.h>     // exit, malloc
 #include <string.h>     // memset, bzero
@@ -16,7 +18,8 @@
 #define MAX_EVENTS 1024
 
 typedef int (*CALLBACK)(int fd);
-typedef int (*msg_handler)(char **msg, int length, char *response);
+
+typedef int (*PROTOCOL) (char* msg,char* response);
 
 
 int accept_cb(int fd);
@@ -26,6 +29,7 @@ int set_nonblocking(int fd);
 int set_event(int fd, int event, int flag);
 int init_server(unsigned short port);
 int main_loop(struct epoll_event *Events, int sockfd);
+int reactor_start(int port,PROTOCOL handler);
 
 struct conn
 {
@@ -43,11 +47,7 @@ struct conn
     } r_action;
 };
 
-int epfd = -1;
-struct conn conn_list[CONN_SIZE] = {0};
 
-struct kv_array_entry
-{
-    char* key;
-    char* value;
-};
+
+
+#endif

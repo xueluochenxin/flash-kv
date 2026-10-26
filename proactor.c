@@ -1,185 +1,202 @@
-#include <stdio.h>
-#include <liburing.h>
-#include <netinet/in.h>
-#include <string.h>
-#include <unistd.h>
-
-
-#define EVENT_ACCEPT   	0
-#define EVENT_READ		1
-#define EVENT_WRITE		2
-
-extern int kvs_protocol(char *msg, int length, char *response);
+//异步 两者之间的关系
+/*
+*/
+#include "proactor.h"
 
 
 
-struct conn_info {
-	int fd;
-	int event;
-};
 
 
-int p_init_server(unsigned short port) {	
-
-	int sockfd = socket(AF_INET, SOCK_STREAM, 0);	
-	struct sockaddr_in serveraddr;	
-	memset(&serveraddr, 0, sizeof(struct sockaddr_in));	
-	serveraddr.sin_family = AF_INET;	
-	serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);	
-	serveraddr.sin_port = htons(port);	
-
-	if (-1 == bind(sockfd, (struct sockaddr*)&serveraddr, sizeof(struct sockaddr))) {		
-		perror("bind");		
-		return -1;	
-	}	
-
-	listen(sockfd, 10);
-	
-	return sockfd;
+int set_nonblocking(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
+int init_server(unsigned short port) // socket bind listen
+{
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0)
+    {
+        perror("socket");
+        return -1;
+    }
+    struct sockaddr_in server_add;
+    memset(&server_add, 0, sizeof(struct sockaddr_in));
+    server_add.sin_family = AF_INET;
+    server_add.sin_addr.s_addr = htonl(INADDR_ANY);
+    server_add.sin_port = htons(port);
 
+    int opt = 1;
+    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)); // 端口复用
+    if (bind(sockfd, (struct sockaddr *)&server_add, sizeof(struct sockaddr_in)))
+    {
+        close(sockfd);
+        perror("bind");
+        return -1;
+    }
 
-#define ENTRIES_LENGTH		1024
-#define BUFFER_LENGTH		1024
+    if (listen(sockfd, 1024) < 0)
+    {
+        perror("listen");
+        close(sockfd);
+        return -1;
+    }
+    set_nonblocking(sockfd);
+    return sockfd;
+}
+int set_event_accept(struct io_uring *ring,int sockfd, struct sockaddr *addr,
+                  socklen_t * addrlen,int flags)
+{    struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
+    if (!sqe) { //防止 SQ 队列满
+        fprintf(stderr, "SQE 获取失败，队列已满\n");
+        return -1;
+    }
 
-int set_event_recv(struct io_uring *ring, int sockfd,
-				      void *buf, size_t len, int flags) {
+    struct conn_info *info = malloc(sizeof(struct conn_info));
+    info->fd = sockfd;
+    info->event = EVENT_ACCEPT;
+    info->buf = NULL;
 
-	struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
+    io_uring_prep_accept(sqe, sockfd, addr, addrlen, flags);
 
-	struct conn_info accept_info = {
-		.fd = sockfd,
-		.event = EVENT_READ,
-	};
-	
-	io_uring_prep_recv(sqe, sockfd, buf, len, flags);
-	memcpy(&sqe->user_data, &accept_info, sizeof(struct conn_info));
+    io_uring_sqe_set_data(sqe, info);
 
 }
+int set_event_recv(struct io_uring *ring,int sockfd, char* buf,
+                  size_t len,int flags)
+{
+    struct io_uring_sqe* sqe=io_uring_get_sqe(ring);
+    if(!sqe)
+    {
+        return -1;
+    }
+    struct conn_info *info = malloc(sizeof(struct conn_info));
+    info->fd = sockfd;
+    info->event = EVENT_READ;
+    info->buf = buf;
 
+    io_uring_prep_recv(sqe, sockfd, buf, len, flags);
 
-int set_event_send(struct io_uring *ring, int sockfd,
-				      void *buf, size_t len, int flags) {
+    io_uring_sqe_set_data(sqe, info);
+}
+int set_event_send(struct io_uring *ring,int sockfd, char* buf,
+                  size_t len, int flags)
+{
+    struct io_uring_sqe* sqe=io_uring_get_sqe(ring);
+    if(!sqe)
+    {
+        return -1;
+    }
+    struct conn_info *info = malloc(sizeof(struct conn_info));
+    info->fd = sockfd;
+    info->event = EVENT_WRITE;
+    info->buf = buf;
 
-	struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
+    io_uring_prep_send(sqe, sockfd, buf, len, flags);
 
-	struct conn_info accept_info = {
-		.fd = sockfd,
-		.event = EVENT_WRITE,
-	};
-	
-	io_uring_prep_send(sqe, sockfd, buf, len, flags);
-	memcpy(&sqe->user_data, &accept_info, sizeof(struct conn_info));
+    io_uring_sqe_set_data(sqe, info);
 
 }
+int main()
+{
+    unsigned short port=9999;
+    int sockfd=init_server(port);
+
+    //
+    struct io_uring_params params;
+    memset(&params,0,sizeof(struct io_uring_params));
+
+    struct io_uring ring;
+    io_uring_queue_init_params(ENTRIES_LENGTH,&ring,&params);
+
+    struct io_uring_sqe* sqe;
+    sqe=io_uring_get_sqe(&ring);
+    //
+
+    struct sockaddr_in client_addr;
+    socklen_t lensock=sizeof(struct sockaddr_in);
+    // struct conn_info accept_info;
+    // accept_info.event=EVENT_ACCEPT;
+    // accept_info.fd=sockfd;
+    // accept_info.buf=NULL;
+
+    set_event_accept(&ring,sockfd,(struct sockaddr*)&client_addr,&lensock,0);
+    struct io_uring_cqe *cqes[128];
+
+    while(1)
+    {
+        int ret = io_uring_submit_and_wait(&ring, 1);  //至少等一个事件
 
 
-
-int set_event_accept(struct io_uring *ring, int sockfd, struct sockaddr *addr,
-					socklen_t *addrlen, int flags) {
-
-	struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
-
-	struct conn_info accept_info = {
-		.fd = sockfd,
-		.event = EVENT_ACCEPT,
-	};
-	
-	io_uring_prep_accept(sqe, sockfd, (struct sockaddr*)addr, addrlen, flags);
-	memcpy(&sqe->user_data, &accept_info, sizeof(struct conn_info));
-
-}
+        if (ret < 0) {
+            perror("io_uring_submit_and_wait");
+            break;
+        }
 
 
-typedef int (*msg_handler)(char *msg, int length, char *response);
-static msg_handler kvs_handler;
+        struct io_uring_cqe *cqe;
+        //io_uring_wait_cqe(&ring,&cqe);
+        
+        int nready= io_uring_peek_batch_cqe(&ring,cqes,128);
+        for(int i=0;i<nready;++i)
+        {
+            struct io_uring_cqe* cqe=cqes[i];
+            struct conn_info *result = (struct conn_info *)io_uring_cqe_get_data(cqe);
+            if(result==NULL)
+            {
+                continue;
+            }
 
+            if(result->event==EVENT_ACCEPT)
+            {
+                int ret=cqe->res;
+                if(ret>0){
+                set_event_accept(&ring,sockfd,(struct sockaddr*)&client_addr,&lensock,0);
+                char* currbuf=malloc(BUFFER_SIZE);
+                set_event_recv(&ring,ret,currbuf,BUFFER_SIZE,0);
+                printf("accept finished\n");
 
-
-
-int proactor_start(unsigned short port, msg_handler handler) {
-
-	int sockfd = p_init_server(port);
-	kvs_handler = handler;
-
-	struct io_uring_params params;
-	memset(&params, 0, sizeof(params));
-
-	struct io_uring ring;
-	io_uring_queue_init_params(ENTRIES_LENGTH, &ring, &params);
-
-	
-#if 0
-	struct sockaddr_in clientaddr;	
-	socklen_t len = sizeof(clientaddr);
-	accept(sockfd, (struct sockaddr*)&clientaddr, &len);
-#else
-
-	struct sockaddr_in clientaddr;	
-	socklen_t len = sizeof(clientaddr);
-	set_event_accept(&ring, sockfd, (struct sockaddr*)&clientaddr, &len, 0);
-	
-#endif
-
-	char buffer[BUFFER_LENGTH] = {0};
-	char response[BUFFER_LENGTH] = {0};
-
-
-	while (1) {
-
-		io_uring_submit(&ring);
-
-
-		struct io_uring_cqe *cqe;
-		io_uring_wait_cqe(&ring, &cqe);
-
-		struct io_uring_cqe *cqes[128];
-		int nready = io_uring_peek_batch_cqe(&ring, cqes, 128);  // epoll_wait
-
-		int i = 0;
-		for (i = 0;i < nready;i ++) {
-
-			struct io_uring_cqe *entries = cqes[i];
-			struct conn_info result;
-			memcpy(&result, &entries->user_data, sizeof(struct conn_info));
-
-			if (result.event == EVENT_ACCEPT) {
-
-				set_event_accept(&ring, sockfd, (struct sockaddr*)&clientaddr, &len, 0);
-				//printf("set_event_accept\n"); //
-
-				int connfd = entries->res;
-
-				set_event_recv(&ring, connfd, buffer, BUFFER_LENGTH, 0);
-
-				
-			} else if (result.event == EVENT_READ) {  //
-
-				int ret = entries->res;
-
-				if (ret == 0) {
-					close(result.fd);
-				} else if (ret > 0) {
-					
-					//int kvs_protocol(char *msg, int length, char *response);
-					ret = kvs_handler(buffer, ret, response);
-					
-					set_event_send(&ring, result.fd, response, ret, 0);
-				}
-			}  else if (result.event == EVENT_WRITE) {
-  //
-
-				int ret = entries->res;
-				//printf("set_event_send ret: %d, %s\n", ret, buffer);
-
-				set_event_recv(&ring, result.fd, buffer, BUFFER_LENGTH, 0);
-				
-			}
-			
-		}
-
-		io_uring_cq_advance(&ring, nready);
-	}
-
+                }
+                else
+                {
+                    set_event_accept(&ring,sockfd,(struct sockaddr*)&client_addr,&lensock,0);
+                }
+                free(result);
+            }
+            else if(result->event==EVENT_READ)
+            {
+                int ret=cqe->res;
+                if(ret>0)
+                {
+                    set_event_send(&ring,result->fd,result->buf,ret,0);
+                    printf("read : %s\n",result->buf);
+                    free(result);
+                }
+                else   ////disconnet  || fail
+                {
+                    printf("disconneted now\n");
+                    close(result->fd);
+                    free(result->buf);
+                    free(result);                    
+                }
+            }
+            else if(result->event==EVENT_WRITE)
+            {
+                if(cqe->res>0)
+                {
+                    set_event_recv(&ring,result->fd,result->buf,BUFFER_SIZE,0);
+                }
+                else
+                {
+                    close(result->fd);
+                    free(result->buf);
+                    free(result);
+                }
+            }
+        }
+        io_uring_cq_advance(&ring,nready);
+    }
+    io_uring_queue_exit(&ring);
+    close(sockfd);
+    return 0;
 }

@@ -1,5 +1,5 @@
  统一协议 
- * SET key value //OK  WRONG
+ * SET key value //OK  WRONG    key已经存在就去修改value
  * GET key       //value INEXIST
  * DEL key       //OK    INEXIST
  * MOD key value //OK    INEXIST
@@ -7,11 +7,8 @@
 
 如果是无效输入   INVALIDE
 
-//尝试加入RESP规范
-*3\r\n
-$3\r\n
-SET\r\n
-$3\r\n
-Key\r\n
-$5\r\n
-Value\r\n
+存储引擎 RBTREE ARRAY HASHMAP SKIPLIST  //KV  INIT DESTORY
+网络部分 reactor proactor 
+
+//2026 10.25加入红黑树，感觉对错误处理不够统一，部分错误判断没有做
+红黑树逻辑处理有误

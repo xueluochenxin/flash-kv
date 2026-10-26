@@ -1,0 +1,801 @@
+================================================================================
+flash kv 数据结构接口说明
+更新日期: 2026-10-19
+适用文件: hashmap.c / hashmap.h
+          RBTREE.c  / RBTREE.h
+          skiplist.c / skiplist.h
+
+说明:
+  1. 本文件只说明当前目录实际使用的哈希表、红黑树、跳表。
+  2. 三个库的 key 和 value 都是 char*（NUL 结尾字符串）。
+  3. 三个库都只保存指针，不 strdup、不 free key/value。
+     key/value 的生命周期由调用方负责。
+  4. 三个头文件可以同时 include；KEY_TYPE 默认已经是 char*，
+     不需要再自己 #define KEY_TYPE。
+================================================================================
+
+
+################################################################################
+## 0. 公共约定（先看这一节）
+################################################################################
+
+### 0.1 key / value 类型
+
+    key   : char*，NUL 结尾字符串
+    value : char*，NUL 结尾字符串
+
+    比较 key 使用 strcmp，排序也是按 strcmp 的字典序。
+    哈希表使用 FNV-1a 字符串哈希。
+
+### 0.2 所有权（最重要）
+
+    库只保存指针，不拷贝字符串，也不释放字符串。
+
+    也就是说，下面这种写法：
+
+        char *k = strdup("name");
+        char *v = strdup("flash");
+        hashmap_put(m, k, v);
+
+    插入后，hashmap 里保存的就是 k、v 这两个指针。
+    k、v 必须一直有效，直到你 remove 之后自己 free。
+
+    特别注意：不要把栈上的临时 buffer 直接存进去。
+    例如下面这样是错的，函数返回后 key 就失效了：
+
+        char key[32];
+        sprintf(key, "user:%d", id);
+        hashmap_put(m, key, value);      /* 错误：key 是栈内存 */
+
+    正确做法是先 strdup/ malloc 一份，再交给表保存。
+
+    库不会帮你 free key；value 也只在你给 destroy/clear 传入
+    value 释放回调时才会被释放。
+
+### 0.3 remove / erase / delete 的语义
+
+    hashmap_remove / skiplist_erase / RBTREE_delete:
+        只删除数据结构中的节点/桶，不释放 key，也不释放 value。
+
+    hashmap_destroy / skiplist_destroy:
+        只释放表本身和节点；
+        只对 value 调用 free_value 回调；
+        key 不会被释放。
+
+    RBTREE_destroy:
+        只释放树节点、哨兵和树本身；
+        key 和 value 都不会被释放。
+
+### 0.4 更新已有 key 的语义
+
+    hashmap_put / skiplist_insert 遇到已存在的 key：
+        只把 value 指针替换成新指针；
+        旧 value 不会被释放；
+        key 指针也不会被替换。
+
+    所以更新时应该先保存旧值：
+
+        char *old = hashmap_get(m, key);
+        hashmap_put(m, key, new_value);
+        free(old);
+
+    如果传入的是新分配的 key 指针，但 key 已存在，
+    库不会保存这个新 key 指针，你需要自己 free 它。
+
+### 0.5 value 释放回调
+
+    typedef void (*hashmap_val_free_fn)(void *value);
+    typedef void (*skiplist_val_free_fn)(void *value);
+
+    参数保留为 void*，所以可以直接传 free：
+
+        hashmap_destroy(m, free);
+        skiplist_destroy(s, free);
+
+    RBTREE 没有 value 释放回调。
+
+### 0.6 头文件包含
+
+        #include "hashmap.h"
+        #include "RBTREE.h"
+        #include "skiplist.h"
+
+    三个头文件都带 include guard，可以放在同一个 .c 里。
+    不要在前面自己写 #define KEY_TYPE int，否则会和字符串实现冲突。
+
+### 0.7 示例里的 strdup
+
+    示例使用 strdup 分配字符串。strdup 不是 C 标准函数，
+    Linux 下需要 _GNU_SOURCE 或 _POSIX_C_SOURCE >= 200809L。
+    也可以自己写：
+
+        static char *dupstr(const char *s) {
+            size_t n = strlen(s) + 1;
+            char *p = malloc(n);
+            if (p) memcpy(p, s, n);
+            return p;
+        }
+
+
+################################################################################
+## 1. 哈希表 (hashmap.c / hashmap.h)
+################################################################################
+
+### 1.1 结构特点
+
+    - 开放寻址 + 线性探测
+    - 负载因子超过 0.7 自动扩容（容量翻倍）
+    - 删除使用墓碑（DELETED）惰性删除
+    - 单线程使用，线程不安全
+    - 查找/插入/删除平均 O(1)
+
+### 1.2 类型和回调
+
+    typedef struct hashmap hashmap;      /* 不完整类型，内部字段不用管 */
+
+    typedef int (*hashmap_iter_fn)(char *key, char *value, void *userdata);
+    typedef void (*hashmap_val_free_fn)(void *value);
+
+    hashmap_iter_fn:
+        遍历回调。返回 0 继续遍历，返回非 0 提前结束。
+
+    hashmap_val_free_fn:
+        destroy/clear 时对每个 value 调用，可直接传 free。
+
+### 1.3 对外接口
+
+--- 创建 / 销毁 ---
+
+    hashmap *hashmap_create(size_t initial_cap);
+        /* initial_cap 传 0 使用默认容量 16；
+           否则向上取到 2 的幂。失败返回 NULL。 */
+
+    void hashmap_destroy(hashmap *m, hashmap_val_free_fn free_value);
+        /* 销毁整张表。
+           free_value 非 NULL 时，对每个仍存在的 value 调用一次。
+           key 不会被释放。
+           传 NULL 表示库不碰 value。 */
+
+    void hashmap_clear(hashmap *m, hashmap_val_free_fn free_value);
+        /* 清空所有键值对，保留已分配的容量。
+           free_value 语义同 destroy。
+           key 不会被释放。 */
+
+--- 增 / 删 / 改 ---
+
+    int hashmap_put(hashmap *m, char *key, char *value);
+        /* 插入或更新。
+           返回 1：插入成功
+           返回 0：key 已存在，只替换了 value，旧 value 未释放
+           返回 -1：参数非法（m/key 为 NULL）或内存不足
+           可用 hashmap_last_error() 查看错误码。 */
+
+    int hashmap_remove(hashmap *m, char *key);
+        /* 删除 key。
+           返回 1：删除成功
+           返回 0：key 不存在，或参数非法
+           只删除桶里的指针，不释放 key/value。 */
+
+--- 查 / 读 ---
+
+    char *hashmap_get(const hashmap *m, char *key);
+        /* 返回 key 对应的 value 指针。
+           不存在返回 NULL。
+           注意：如果 value 本身就是 NULL，无法和“不存在”区分，
+           需要配合 hashmap_contains 判断。 */
+
+    int hashmap_contains(const hashmap *m, char *key);
+        /* 存在返回 1，否则 0。 */
+
+    size_t hashmap_size(const hashmap *m);
+        /* 当前键值对数量。 */
+
+    int hashmap_empty(const hashmap *m);
+        /* 空表返回 1，否则 0。 */
+
+--- 遍历 ---
+
+    int hashmap_foreach(const hashmap *m,
+                        hashmap_iter_fn fn, void *userdata);
+        /* 依次对每个 (key, value) 调用 fn。
+           fn 返回非 0 时提前结束，并把这个值返回。
+           全部遍历完返回 0。
+           遍历期间禁止 put/remove。 */
+
+    size_t hashmap_keys(const hashmap *m, char **out_keys);
+        /* 把所有 key 指针拷贝到 out_keys 数组。
+           out_keys 由调用方分配，容量至少 hashmap_size(m)。
+           返回实际写入个数。
+           注意：拷贝的是 key 指针，不是字符串内容。 */
+
+--- 扩展 / 错误处理 ---
+
+    int hashmap_reserve(hashmap *m, size_t n);
+        /* 预留至少能容纳 n 个元素的容量。
+           成功返回 0，内存不足返回 -1。 */
+
+    int hashmap_last_error(const hashmap *m);
+        /* 上次操作状态码：
+           HASHMAP_OK            0
+           HASHMAP_ERR_OOM       1
+           HASHMAP_ERR_FULL      2
+           HASHMAP_ERR_NOTFOUND  3
+           m 为 NULL 时返回 HASHMAP_ERR_NOTFOUND。 */
+
+### 1.4 调用示例
+
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include "hashmap.h"
+
+    int main(void)
+    {
+        hashmap *m = hashmap_create(0);
+        char *key = strdup("name");
+        char *value = strdup("flash");
+        char *got;
+        char *old;
+        char *removed;
+
+        if (m == NULL) return 1;
+        if (key == NULL || value == NULL) {
+            free(key);
+            free(value);
+            hashmap_destroy(m, NULL);
+            return 1;
+        }
+
+        /* 插入 */
+        if (hashmap_put(m, key, value) != 1) {
+            free(key);
+            free(value);
+            hashmap_destroy(m, NULL);
+            return 1;
+        }
+
+        /* 查询 */
+        got = hashmap_get(m, "name");
+        printf("name=%s\n", got != NULL ? got : "(null)");
+        printf("contains=%d size=%zu\n",
+               hashmap_contains(m, "name"), hashmap_size(m));
+
+        /* 更新：先保存旧 value，put 之后再 free */
+        old = hashmap_get(m, "name");
+        {
+            char *new_value = strdup("flash-kv");
+            if (new_value == NULL) {
+                /* OOM：保留旧值 */
+            } else if (hashmap_put(m, "name", new_value) == 0) {
+                free(old);          /* 旧 value 由调用方释放 */
+            } else {
+                free(new_value);    /* 更新失败，新值没有存进去 */
+            }
+        }
+
+        /* 删除：先取出 value，再 remove，最后 free */
+        removed = hashmap_get(m, "name");
+        if (hashmap_remove(m, "name")) {
+            free(removed);
+        }
+
+        /* 销毁；如果表里还有 value，传 free 让库帮你释放 value */
+        hashmap_destroy(m, free);
+
+        /* key 是调用方分配的；表销毁后由调用方释放 */
+        free(key);
+        return 0;
+    }
+
+### 1.5 hashmap 注意事项
+
+    1. key 不能是 NULL；value 可以是 NULL，但 get 会分不清“不存在”和“值为 NULL”。
+    2. put 更新已有 key 时，旧 value 不会自动释放。
+    3. remove 不会释放 key/value。
+    4. destroy/clear 只释放 value，不释放 key。
+    5. 遍历期间不要 put/remove，否则可能破坏探测链。
+    6. hashmap_keys 返回的是 key 指针，不是字符串副本。
+    7. 如果 key 都是 strdup 的，可以在 destroy 前用 hashmap_keys
+       取出所有 key 指针，逐个 free 后再 destroy。
+
+
+################################################################################
+## 2. 红黑树 (RBTREE.c / RBTREE.h)
+################################################################################
+
+### 2.1 结构特点
+
+    - 侵入式红黑树
+    - 节点由调用方 malloc，key/value 由调用方填好
+    - 树内用黑色哨兵 nil 表示空节点
+    - 查找/插入/删除 O(log n)
+    - 按 key 的 strcmp 字典序排序
+
+### 2.2 节点类型
+
+    typedef struct rbtree_node {
+        char *key;        /* 字符串键 */
+        char *value;      /* 字符串值 */
+        RBTREE_ENTRY(, rbtree_node) node;
+    } rbtree_node;
+
+    typedef struct rbtree {
+        struct rbtree_node *root;
+        struct rbtree_node *nil;
+    } rbtree;
+
+    注意：
+      - 不要直接修改 node 里的 left/right/parent/color。
+      - key 是排序依据，节点在树里时不要改 key。
+      - 如果需要换 key，先 delete 旧节点，再 insert 新节点。
+
+### 2.3 对外接口
+
+--- 创建 / 销毁 ---
+
+    rbtree *RBTREE_create(void);
+        /* 创建红黑树，失败返回 NULL。 */
+
+    void RBTREE_destroy(rbtree *T);
+        /* 释放所有节点、哨兵和树本身。
+           不释放 key，也不释放 value。 */
+
+--- 查找 ---
+
+    rbtree_node *RBTREE_search(rbtree *T, char *key);
+        /* 找到返回节点指针，没找到返回 NULL。 */
+
+--- 插入 / 删除 ---
+
+    int RBTREE_insert(rbtree *T, rbtree_node *z);
+        /* z 必须是 malloc/calloc 出来的，且 z->key、z->value 已填好。
+           返回 0：插入成功
+           返回 -1：参数非法，或 key 已存在
+           返回 -1 时节点没有插入，调用方需要自己释放 z 及其 key/value。 */
+
+    int RBTREE_delete(rbtree *T, char *key);
+        /* 删除 key 并修复红黑性质。
+           返回 0：成功
+           返回 -1：key 不存在，或参数非法
+           只 free 节点本身，不 free key/value。
+           删除后原来的 rbtree_node* 不能再使用。 */
+
+--- 校验 / 打印（测试用） ---
+
+    int RBTREE_check(rbtree *T);
+        /* 校验红黑树性质：返回 1 合法，0 非法。 */
+
+    void RBTREE_inorder(rbtree *T, rbtree_node *node);
+        /* 中序遍历并按 key 升序打印到 stdout。
+           通常传 RBTREE_inorder(T, T->root)。 */
+
+--- 相关宏 / 颜色常量 ---
+
+    RBTREE_ENTRY(name, type)
+        /* 侵入式节点成员宏，可把红黑树节点嵌入自己的业务结构体。
+           当前工程直接使用 rbtree_node 即可。 */
+
+    RED / BLACK
+        /* 节点颜色常量，一般不需要直接操作。 */
+
+### 2.4 调用示例
+
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include "RBTREE.h"
+
+    int main(void)
+    {
+        rbtree *t = RBTREE_create();
+        rbtree_node *n;
+        rbtree_node *found;
+
+        if (t == NULL) return 1;
+
+        /* 插入 */
+        n = (rbtree_node *)calloc(1, sizeof(*n));
+        if (n == NULL) return 1;
+        n->key = strdup("name");
+        n->value = strdup("flash");
+        if (n->key == NULL || n->value == NULL) {
+            free(n->key);
+            free(n->value);
+            free(n);
+            RBTREE_destroy(t);
+            return 1;
+        }
+
+        if (RBTREE_insert(t, n) != 0) {
+            /* 插入失败：key 已存在或参数错误，节点未进树 */
+            free(n->key);
+            free(n->value);
+            free(n);
+        }
+
+        /* 查找 */
+        found = RBTREE_search(t, "name");
+        if (found != NULL) {
+            printf("name=%s\n", found->value);
+        }
+
+        /* 更新 value：key 不动，直接改 value 指针 */
+        if (found != NULL) {
+            char *new_value = strdup("flash-kv");
+            if (new_value != NULL) {
+                char *old_value = found->value;
+                found->value = new_value;
+                free(old_value);
+            }
+        }
+
+        /* 删除：先把 key/value 指针保存下来，再 delete */
+        if (found != NULL) {
+            char *saved_key = found->key;
+            char *saved_value = found->value;
+            if (RBTREE_delete(t, "name") == 0) {
+                free(saved_key);
+                free(saved_value);
+            }
+        }
+
+        printf("check=%d\n", RBTREE_check(t));
+        RBTREE_inorder(t, t->root);
+
+        /* 树为空，destroy 只释放节点/哨兵/树 */
+        RBTREE_destroy(t);
+        return 0;
+    }
+
+### 2.5 RBTREE 注意事项
+
+    1. 节点必须由调用方 malloc/calloc；不要传栈上的 rbtree_node。
+    2. RBTREE_insert 失败时节点没有进树，调用方要自己 free。
+    3. RBTREE_delete 会 free 节点本身，删除后 node 指针失效。
+    4. RBTREE_destroy 不释放 key/value；如果树里还有节点，
+       需要在 destroy 前自己保存并释放 key/value。
+       树节点结构是公开的，可以自己从 T->root 遍历；
+       或者在业务层另存 key/value 指针，删除时统一释放。
+    5. 不要在节点还在树里时修改 key。
+    6. RBTREE_check 只用于测试，生产路径可以不调用。
+    7. RBTREE_ENTRY 可以把红黑树节点嵌入自己的业务结构体，
+       但当前工程直接使用 rbtree_node 即可。
+
+
+################################################################################
+## 3. 跳表 (skiplist.c / skiplist.h)
+################################################################################
+
+### 3.1 结构特点
+
+    - 有序多层链表，按 key 的 strcmp 字典序升序
+    - 期望最高 32 层，每层晋升概率 p = 0.5
+    - 带头结点 + NULL 哨兵尾
+    - 查找/插入/删除平均 O(log n)
+    - 支持范围查询和有序遍历
+
+### 3.2 节点类型
+
+    typedef struct skiplist_node {
+        char *key;
+        char *value;
+        struct skiplist_node **forward;
+        int level;
+    } skiplist_node;
+
+    typedef struct skiplist {
+        skiplist_node *head;
+        int max_level;
+        int cur_level;
+        size_t size;
+        int last_error;
+        double p;
+    } skiplist;
+
+    注意：
+      - 头结点的 key/value 恒为 NULL，不要使用。
+      - 遍历时不要插入/删除，否则 node 可能悬空。
+
+### 3.3 回调类型
+
+    typedef int (*skiplist_iter_fn)(char *key, char *value, void *userdata);
+    typedef void (*skiplist_val_free_fn)(void *value);
+
+    skiplist_iter_fn:
+        返回 0 继续，返回非 0 提前终止。
+
+    skiplist_val_free_fn:
+        destroy/clear 时对 value 调用，可直接传 free。
+
+### 3.4 对外接口
+
+--- 创建 / 销毁 ---
+
+    skiplist *skiplist_create(int max_level);
+        /* max_level 传 0 使用默认 32；
+           传入值夹到 [1, 32]。失败返回 NULL。 */
+
+    void skiplist_destroy(skiplist *s, skiplist_val_free_fn free_value);
+        /* 销毁并释放所有节点。
+           free_value 非 NULL 时对每个 value 调用一次。
+           key 不会被释放。 */
+
+    void skiplist_clear(skiplist *s, skiplist_val_free_fn free_value);
+        /* 清空所有节点，保留结构可继续插入。
+           free_value 语义同 destroy。 */
+
+--- 增 / 删 / 改 ---
+
+    int skiplist_insert(skiplist *s, char *key, char *value);
+        /* 插入或更新。
+           返回 1：插入成功
+           返回 0：key 已存在，只更新 value，旧 value 未释放，
+                   key 指针也不会被替换
+           返回 -1：参数非法（s/key 为 NULL）或内存不足 */
+
+    int skiplist_erase(skiplist *s, char *key);
+        /* 删除 key。
+           返回 1：成功
+           返回 0：不存在或参数非法
+           只 free 节点，不 free key/value。 */
+
+--- 查 / 读 ---
+
+    char *skiplist_get(skiplist *s, char *key);
+        /* 返回 value 指针；不存在返回 NULL。
+           如果 value 本身是 NULL，需要配合 contains 判断。 */
+
+    int skiplist_contains(const skiplist *s, char *key);
+        /* 存在返回 1，否则 0。 */
+
+    size_t skiplist_size(const skiplist *s);
+        /* 元素个数。 */
+
+    int skiplist_empty(const skiplist *s);
+        /* 空表返回 1，否则 0。 */
+
+--- 有序范围 / 遍历 ---
+
+    skiplist_node *skiplist_first(const skiplist *s);
+        /* key 最小的节点；空表返回 NULL。 */
+
+    skiplist_node *skiplist_next(const skiplist *s, skiplist_node *node);
+        /* 返回严格大于 node->key 的下一个节点；越界返回 NULL。
+           遍历期间不要插入/删除。 */
+
+    int skiplist_range(skiplist *s, char *low, char *high,
+                       skiplist_iter_fn fn, void *userdata);
+        /* 闭区间 [low, high]，按 key 升序回调 fn。
+           strcmp(low, high) > 0 返回 -1（SKIPLIST_ERR_RANGE）。
+           fn 返回非 0 时提前终止，并把这个值作为返回值传出。
+           全部完成返回 0。 */
+
+    int skiplist_foreach(const skiplist *s,
+                         skiplist_iter_fn fn, void *userdata);
+        /* 按 key 升序对每个 (key, value) 调用 fn。
+           fn 返回非 0 时提前结束并传出。 */
+
+--- 扩展 / 错误处理 ---
+
+    int skiplist_set_p(skiplist *s, int p_q5);
+        /* 修改晋升概率 p，p_q5 = p * 32，范围 [1, 32]。
+           默认 16，即 p = 0.5。
+           只影响之后新节点。成功返回 0，参数越界返回 -1。 */
+
+    int skiplist_last_error(const skiplist *s);
+        /* 上次操作状态码：
+           SKIPLIST_OK            0
+           SKIPLIST_ERR_OOM       1
+           SKIPLIST_ERR_RANGE     2
+           SKIPLIST_ERR_NOTFOUND  3
+           SKIPLIST_ERR_PARAM     4 */
+
+### 3.5 调用示例
+
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include "skiplist.h"
+
+    static int print_item(char *key, char *value, void *userdata)
+    {
+        (void)userdata;
+        printf("%s=%s\n", key, value);
+        return 0;
+    }
+
+    int main(void)
+    {
+        skiplist *s = skiplist_create(0);
+        char *key = strdup("a");
+        char *value = strdup("1");
+        char *got;
+        char *old;
+        char *removed;
+
+        if (s == NULL) return 1;
+        if (key == NULL || value == NULL) {
+            free(key);
+            free(value);
+            skiplist_destroy(s, NULL);
+            return 1;
+        }
+
+        /* 插入 */
+        if (skiplist_insert(s, key, value) != 1) {
+            free(key);
+            free(value);
+            skiplist_destroy(s, NULL);
+            return 1;
+        }
+
+        /* 查询 */
+        got = skiplist_get(s, "a");
+        printf("a=%s\n", got != NULL ? got : "(null)");
+
+        /* 更新：先保存旧值，insert 之后再 free */
+        old = skiplist_get(s, "a");
+        {
+            char *new_value = strdup("2");
+            if (new_value == NULL) {
+                /* OOM：保留旧值 */
+            } else if (skiplist_insert(s, "a", new_value) == 0) {
+                free(old);          /* 旧 value 由调用方释放 */
+            } else {
+                free(new_value);
+            }
+        }
+
+        /* 插入更多数据，便于范围查询 */
+        skiplist_insert(s, "b", strdup("3"));
+        skiplist_insert(s, "c", strdup("4"));
+        skiplist_insert(s, "d", strdup("5"));
+
+        /* 有序遍历 */
+        skiplist_foreach(s, print_item, NULL);
+
+        /* 范围查询 [b, c] */
+        printf("range b..c:\n");
+        skiplist_range(s, "b", "c", print_item, NULL);
+
+        /* 用 first/next 遍历 */
+        {
+            skiplist_node *n;
+            for (n = skiplist_first(s); n != NULL; n = skiplist_next(s, n)) {
+                printf("node: %s=%s\n", n->key, n->value);
+            }
+        }
+
+        /* 删除：先取 value，再 erase，最后 free */
+        removed = skiplist_get(s, "a");
+        if (skiplist_erase(s, "a")) {
+            free(removed);
+        }
+
+        /* 销毁：对剩余 value 调用 free；key 需要自己管理 */
+        skiplist_destroy(s, free);
+
+        /* key 是调用方分配的；表销毁后由调用方释放 */
+        free(key);
+        return 0;
+    }
+
+### 3.6 skiplist 注意事项
+
+    1. key 不能是 NULL；value 可以是 NULL，但 get 会分不清“不存在”和“值为 NULL”。
+    2. insert 遇到重复 key 只更新 value，旧 value 不释放。
+    3. erase 不释放 key/value。
+    4. destroy/clear 只释放 value，不释放 key。
+    5. 遍历/范围查询期间不要插入或删除。
+    6. skiplist_first/skiplist_next 返回的是内部节点指针，
+       不要 free 这个节点。
+    7. 如果 key 都是 strdup 的，可以在 destroy 前用 skiplist_foreach
+       回调逐个 free key（遍历期间不要做结构修改）。
+
+
+################################################################################
+## 4. 调用速记
+################################################################################
+
+哈希表（无序，O(1)）：
+
+    hashmap *m = hashmap_create(0);
+    char *k = strdup("name");
+    char *v = strdup("flash");
+    hashmap_put(m, k, v);
+
+    char *got = hashmap_get(m, "name");
+    if (hashmap_remove(m, "name")) {
+        free(v);             /* 删除成功后由调用方释放 value */
+    }
+    hashmap_destroy(m, free);/* remove 失败时由这里释放 value */
+    free(k);                 /* key 始终由调用方释放 */
+
+
+红黑树（有序，侵入式节点）：
+
+    rbtree *t = RBTREE_create();
+    rbtree_node *n = calloc(1, sizeof(*n));
+    n->key = strdup("name");
+    n->value = strdup("flash");
+    /* 实际代码要检查返回值；失败时 free n 及其 key/value */
+    RBTREE_insert(t, n);
+
+    rbtree_node *found = RBTREE_search(t, "name");
+    /* 修改 value：found->value = new_value; free(old_value); */
+    /* 删除：先保存 key/value，因为 RBTREE_delete 会 free 节点本身 */
+    if (found != NULL) {
+        char *saved_key = found->key;
+        char *saved_value = found->value;
+        RBTREE_delete(t, "name");
+        free(saved_key);
+        free(saved_value);
+    }
+    RBTREE_destroy(t);
+
+
+跳表（有序，支持范围查询）：
+
+    skiplist *s = skiplist_create(0);
+    char *k = strdup("a");
+    char *v = strdup("1");
+    skiplist_insert(s, k, v);
+
+    char *got = skiplist_get(s, "a");
+    skiplist_foreach(s, print_item, NULL);
+    skiplist_range(s, "a", "z", print_item, NULL);
+    if (skiplist_erase(s, "a")) {
+        free(v);             /* 删除成功后由调用方释放 value */
+    }
+    skiplist_destroy(s, free);/* erase 失败时由这里释放 value */
+    free(k);                  /* key 始终由调用方释放 */
+
+
+################################################################################
+## 5. 常见错误
+################################################################################
+
+1. 把 key/value 当成库会帮你释放
+
+       错误：hashmap_put(m, strdup("k"), strdup("v")); 然后不管了
+       正确：保存指针，删除/销毁时自己 free；或者用你自己的 kv_entry 统一管理
+
+2. 更新已有 key 时只 free 新值，不 free 旧值
+
+       错误：
+           hashmap_put(m, "k", strdup("new"));
+       正确：
+           char *old = hashmap_get(m, "k");
+           hashmap_put(m, "k", strdup("new"));
+           free(old);
+
+3. 删除后继续使用旧 value 指针
+
+       hashmap_remove 不会 free value，但 bucket 里的指针已经被清掉；
+       如果你之前保存了 value 指针，可以在 remove 后 free 它。
+
+4. 删除后继续使用 RBTREE 节点
+
+       RBTREE_delete 会 free 节点本身；
+       删除前先把 node->key / node->value 保存下来。
+
+5. 在 foreach / range 里插入或删除
+
+       遍历期间禁止 put/remove/insert/erase，否则可能访问已释放节点。
+
+6. 自己 #define KEY_TYPE int
+
+       三个头文件默认已经是 char*；
+       如果改成 int，会和 strcmp/字符串哈希实现冲突。
+
+7. 混用 free 和 strdup
+
+       strdup 出来的 key/value 必须用 free 释放；
+       不要把字符串字面量传给 free。
+
+8. hashmap_get 返回 NULL 就认为“一定不存在”
+
+       如果允许存 NULL value，必须用 hashmap_contains 判断；
+       KV 场景建议 value 始终非 NULL。
+
+================================================================================

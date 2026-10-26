@@ -1,5 +1,12 @@
 #include "reactor.h"
 
+
+int epfd = -1;
+struct conn conn_list[CONN_SIZE] = {0};
+PROTOCOL g_protocol = NULL;
+
+
+
 int set_nonblocking(int fd)
 {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -70,7 +77,7 @@ int accept_cb(int fd)
             if (errno == EINTR)
                 continue;
             perror("accept");
-            return -1; // ★ 关键：失败必须 return
+            return -1; //  关键：失败必须 return
         }
         // 把新的fd加入ev监控列表
         set_nonblocking(clientfd);
@@ -115,11 +122,42 @@ int recv_cb(int fd)
     // recv不会自动加入\0  需要我们手动加进去
     conn_list[fd].rbuffer[count] = '\0';
     conn_list[fd].rlen = count;
+    
+
+    memset(conn_list[fd].wbuffer, 0, BUFFER_SIZE);
+    int responselength=g_protocol(conn_list[fd].rbuffer,conn_list[fd].wbuffer);
+    if(responselength<0)
+    {
+        return -1;
+    }
+    conn_list[fd].wlen=responselength;
+    set_event(fd,EPOLLOUT,MOD_FLAG);
     return count;
 }
 
-int send_cb(int fd)
-{
+int send_cb(int fd)// 返回值小于0表示send失败
+{  
+    int n=send(fd,conn_list[fd].wbuffer,conn_list[fd].wlen,0);
+      if (n <= 0)
+    {
+        // 发送失败或对端关闭
+        epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);
+        close(fd);
+        return -1;
+    }
+        if (n < conn_list[fd].wlen)
+    {
+        // 只发了一部分
+        memmove(conn_list[fd].wbuffer,
+                conn_list[fd].wbuffer + n,
+                conn_list[fd].wlen - n);
+        conn_list[fd].wlen -= n;
+        set_event(fd, EPOLLOUT, MOD_FLAG);   
+        return n;
+    }
+  conn_list[fd].wlen = 0;
+  set_event(fd,EPOLLIN,MOD_FLAG);
+  return n;
 }
 
 int main_loop(struct epoll_event *Events, int sockfd)
@@ -136,7 +174,8 @@ int main_loop(struct epoll_event *Events, int sockfd)
         {
             if (Events[i].data.fd == sockfd)
             {
-                accept_cb(Events[i].data.fd);
+                int res=conn_list[sockfd].r_action.accept_cb(sockfd);
+                //res< 0 fail
             }
             else
             {
@@ -144,24 +183,29 @@ int main_loop(struct epoll_event *Events, int sockfd)
                 {
                     epoll_ctl(epfd, EPOLL_CTL_DEL, Events[i].data.fd, NULL);
                     close(Events[i].data.fd);
-                    continue; // ★ 处理完直接跳过，不要再走 IN/OUTS
+                    continue; //  处理完直接跳过，不要再走 IN/OUTS
                 }
                 if (Events[i].events & EPOLLIN)
                 {
-                    if (recv_cb(Events[i].data.fd) < 0) continue;   // ★ 已关闭，跳过 OUT
+                    if (conn_list[Events[i].data.fd].r_action.recv_cb(Events[i].data.fd) < 0)
+                     continue;   //  已关闭，跳过 OUT
                 }
                 if (Events[i].events & EPOLLOUT)
                 {
-                    send_cb(Events[i].data.fd);
+                    int res=conn_list[Events[i].data.fd].send_cb(Events[i].data.fd);
+                    // if res<0   fail
                 }
             }
         }
     }
     return 0;
 }
-int reactor_start(int port,msg_handler)
+
+int reactor_start(int port,PROTOCOL handler)
 {
     epfd = epoll_create1(0);
+
+    g_protocol=handler;
 
     struct epoll_event Events[MAX_EVENTS];
     memset(Events, 0, sizeof(struct epoll_event) * MAX_EVENTS);
