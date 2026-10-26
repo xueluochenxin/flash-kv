@@ -3,3 +3,5 @@
 *.d
 flash_kv
 kvstore
+# read.txt 不入库（个人笔记留在 Z:\flash_kv 本地）
+read.txt
