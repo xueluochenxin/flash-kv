@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <stdio.h>
+#include <ctype.h>
 #include "kvmemctl.h"
 
 
@@ -371,7 +373,7 @@ int skiplist_split_command(char *input, char *output[]) // 返回值为解析出
 int kvs_skiplist_protocol(char *msg, char *response)
 {
     char *tokens[16] = {0};
-    int count = hash_split_command(msg, tokens);
+    int count = skiplist_split_command(msg, tokens);
     if (count == 0 || tokens[0] == NULL) // 空输入保护
     {
         sprintf(response, "ERROR");
@@ -424,7 +426,7 @@ int kvs_skiplist_protocol(char *msg, char *response)
         int res=skiplist_erase(sl,key);
         if(res==0)
         {
-            sprintf(response, "ERROR");
+            sprintf(response, "INEXIST");
             return strlen(response);            
         }
         sprintf(response, "OK");

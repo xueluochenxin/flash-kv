@@ -55,8 +55,3 @@ make                # 生成可执行文件 flash_kv
 make clean
 ```
 
-## 当前状态 / 已知问题
-
-- 当前默认 `STORE_ENGINE = SKIPLIST_S`，而 `kvs_skiplist_protocol` 尚未实现，`make` 会在链接阶段报 `undefined reference to kvs_skiplist_protocol`；改 `flash_kvstore.c` 顶部的宏为其他引擎可先跑通。
-- 红黑树引擎为 2026-10-25 新加入：错误处理尚未统一，部分错误判断缺失，红黑树逻辑处理有误，待修正。
-- `main()` 目前只在 `REACTOR` 分支调用 `reactor_start()`，`PROACTOR` 分支的启动路径尚未接入。
