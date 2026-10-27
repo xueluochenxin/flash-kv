@@ -15,27 +15,35 @@
 
 
 #define ENTRIES_LENGTH 1024
+
 #define EVENT_ACCEPT 0
 #define EVENT_READ  1
 #define EVENT_WRITE 2
+
 #define BUFFER_SIZE 1024
+#define CONN_SIZE 1024
+
+typedef int (*PROTOCOL) (char* msg,char* response);
 
 struct conn_info{
-int fd;int event;
-char *buf;
+int fd;
+char readbuf[BUFFER_SIZE];
+int readlen;
+char writebuf[BUFFER_SIZE];
+int writelen;
+int event;
+
 };
 
-int set_event_send(struct io_uring *ring,int sockfd, char* buf,
-                  size_t len, int flags);
+int set_event_send(struct io_uring *ring, struct conn_info *info);
 int set_nonblocking(int fd);
 int init_server(unsigned short port); 
 int set_event_accept(struct io_uring *ring,int sockfd, struct sockaddr *addr,
                   socklen_t * addrlen,int flags);           
-int set_event_recv(struct io_uring *ring,int sockfd, char* buf,
-                  size_t len,int flags);
+int set_event_recv(struct io_uring *ring,struct conn_info *info);
+struct io_uring_sqe *get_sqe(struct io_uring *ring);
 
-
-
-
+void conn_close(struct conn_info *info);
+int proactor_start(int port, PROTOCOL handler);
 
 #endif

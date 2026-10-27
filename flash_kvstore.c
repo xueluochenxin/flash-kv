@@ -8,7 +8,7 @@
 #define SKIPLIST_S 4
 
 
-#define NET_ENGINE REACTOR
+#define NET_ENGINE PROACTOR
 #define STORE_ENGINE SKIPLIST_S
 
 
@@ -80,6 +80,8 @@ sl=skiplist_create(0);
 #if(NET_ENGINE == REACTOR)
 
 reactor_start(port,protocol);
+#elif (NET_ENGINE == PROACTOR)
+proactor_start(port,protocol);
 #endif
 
 

@@ -53,14 +53,14 @@ while(index<ARRAY_LENTH)
 if(issucces==0)
 {
     //printf("array is full\n");
-    sprintf(output,"WRONG");
+    sprintf(output,"WRONG\n");
     return -1; 
 }
     kv_array[index].key   = kv_malloc(strlen(msg[1]) + 1);  
     kv_array[index].value = kv_malloc(strlen(msg[2]) + 1);
     strcpy(kv_array[index].key, msg[1]);                     
     strcpy(kv_array[index].value, msg[2]);
-sprintf(output,"OK");
+sprintf(output,"OK\n");
     return 1;
 }
 
@@ -72,7 +72,7 @@ while(index<ARRAY_LENTH)
 {
     if(kv_array[index].key != NULL &&strcmp(kv_array[index].key,msg[1])==0)
     {
-        sprintf(output,"%s",kv_array[index].value);
+        sprintf(output,"%s\n",kv_array[index].value);
         success=1;
         break;
     }
@@ -84,7 +84,7 @@ if(success==1)
 }
 if(success==0)
 {
-    sprintf(output,"INEXIST");
+    sprintf(output,"INEXIST\n");
     return -1;
 }
 }
@@ -97,7 +97,7 @@ while(index<ARRAY_LENTH)
 {
     if(kv_array[index].key != NULL &&strcmp(kv_array[index].key,msg[1])==0)
     {
-        sprintf(output,"OK");
+        sprintf(output,"OK\n");
         kv_free(kv_array[index].key);
         kv_free(kv_array[index].value);
         kv_array[index].key=NULL;
@@ -113,7 +113,7 @@ if(success)
 }
 if(success==0)
 {
-    sprintf(output,"INEXIST");
+    sprintf(output,"INEXIST\n");
     return -1;
 }
 }
@@ -127,7 +127,7 @@ while(index<ARRAY_LENTH)
 {
     if(kv_array[index].key != NULL &&strcmp(kv_array[index].key,msg[1])==0)
     {
-        sprintf(output,"OK");
+        sprintf(output,"OK\n");
         kv_free(kv_array[index].value);
         kv_array[index].value = kv_malloc(strlen(msg[2]) + 1);
         strcpy(kv_array[index].value, msg[2]);
@@ -142,7 +142,7 @@ if(success==1)
 }
 if(success==0)
 {
-    sprintf(output,"INEXIST");
+    sprintf(output,"INEXIST\n");
     return -1;
 }
 }
@@ -155,7 +155,7 @@ while(index<ARRAY_LENTH)
 {
     if(kv_array[index].key != NULL &&strcmp(kv_array[index].key,msg[1])==0)
     {
-        sprintf(output,"YES");
+        sprintf(output,"YES\n");
         success=1;
         break;
     }
@@ -167,7 +167,7 @@ if(success==1)
 }
 if(success==0)
 {
-    sprintf(output,"NO");
+    sprintf(output,"NO\n");
     return -1;
 }
 }
@@ -208,7 +208,7 @@ int kvs_array_protocol(char* msg,char* response)
     int count=split_command(msg,tokens);
         if(count == 0||tokens[0]==NULL)          // 空输入保护
     {
-        sprintf(response,"ERROR");
+        sprintf(response,"ERROR\n");
         return -1;
     }
 	char* command=tokens[0];

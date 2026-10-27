@@ -529,7 +529,7 @@ int kvs_rbtree_protocol(char *msg, char *response)
     int count = rb_split_command(msg, tokens);
     if (count == 0 || tokens[0] == NULL) // 空输入保护
     {
-        sprintf(response, "ERROR");
+        sprintf(response, "ERROR\n");
         return strlen(response);
     }
     char *command = tokens[0];
@@ -539,7 +539,7 @@ int kvs_rbtree_protocol(char *msg, char *response)
 
         if (count < 3 || tokens[1] == NULL || tokens[2] == NULL)
         {
-            sprintf(response, "INVALID");
+            sprintf(response, "INVALID\n");
             return strlen(response);
         }
         rbtree_node *node = RBTREE_search(T, tokens[1]);
@@ -548,7 +548,7 @@ int kvs_rbtree_protocol(char *msg, char *response)
             node = (rbtree_node *)kv_malloc(sizeof(rbtree_node));
             if (node == NULL)
             {
-                sprintf(response, "ERROR");
+                sprintf(response, "ERROR\n");
                 return strlen(response);
             }
             memset(node, 0, sizeof(rbtree_node));
@@ -559,7 +559,7 @@ int kvs_rbtree_protocol(char *msg, char *response)
                 kv_free(node->key);
                 kv_free(node->value);
                 free(node);
-                sprintf(response, "ERROR");
+                sprintf(response, "ERROR\n");
                 return strlen(response);
             }
 
@@ -570,10 +570,10 @@ int kvs_rbtree_protocol(char *msg, char *response)
                 kv_free(node->key);
                 kv_free(node->value);
                 free(node);
-                sprintf(response, "WRONG");
+                sprintf(response, "WRONG\n");
                 return strlen(response);
             }
-            sprintf(response, "OK");
+            sprintf(response, "OK\n");
             return strlen(response);
         }
         else // if (node != NULL)
@@ -581,7 +581,7 @@ int kvs_rbtree_protocol(char *msg, char *response)
             char *new_value = kv_malloc(strlen(tokens[2]) + 1);
             if (new_value == NULL)
             {
-                sprintf(response, "ERROR");
+                sprintf(response, "ERROR\n");
                 return strlen(response);
             }
 
@@ -589,7 +589,7 @@ int kvs_rbtree_protocol(char *msg, char *response)
 
             kv_free(node->value);
             node->value = new_value;
-            sprintf(response, "OK");
+            sprintf(response, "OK\n");
             return strlen(response);
         }
     }
@@ -597,32 +597,32 @@ int kvs_rbtree_protocol(char *msg, char *response)
     {
         if (count < 2 || tokens[1] == NULL)
         {
-            sprintf(response, "INVALID");
+            sprintf(response, "INVALID\n");
             return strlen(response);
         }
         char *key = tokens[1];
         rbtree_node *node = RBTREE_search(T, key);
         if (node == NULL)
         {
-            sprintf(response, "INEXIST");
+            sprintf(response, "INEXIST\n");
             return strlen(response);
         }
         char *value = node->value;
-        sprintf(response, "%s", value);
+        sprintf(response, "%s\n", value);
         return strlen(response);
     }
     if (strcmp(command, "DEL") == 0)
     {
         if (count < 2 || tokens[1] == NULL)
         {
-            sprintf(response, "ERROR");
+            sprintf(response, "ERROR\n");
             return strlen(response);
         }
         char *key = tokens[1];
         rbtree_node *node = RBTREE_search(T, key);
         if (node == NULL)
         {
-            sprintf(response, "INEXIST");
+            sprintf(response, "INEXIST\n");
             return strlen(response);
         }
         char *tempkey = node->key;
@@ -630,32 +630,32 @@ int kvs_rbtree_protocol(char *msg, char *response)
         int res = RBTREE_delete(T, key);
         if (res < 0)
         {
-            sprintf(response, "ERROR");
+            sprintf(response, "ERROR\n");
             return strlen(response);
         }
         kv_free(tempkey);
         kv_free(tempvalue);
-        sprintf(response, "OK");
+        sprintf(response, "OK\n");
         return strlen(response);
     }
     if (strcmp(command, "MOD") == 0)
     {
         if (count < 3 || tokens[1] == NULL || tokens[2] == NULL)
         {
-            sprintf(response, "INVALID");
+            sprintf(response, "INVALID\n");
             return strlen(response);
         }
         char *key = tokens[1];
         rbtree_node *node = RBTREE_search(T, key);
         if (node == NULL)
         {
-            sprintf(response, "INEXIST");
+            sprintf(response, "INEXIST\n");
             return strlen(response);
         }
         char *new_value = kv_malloc(strlen(tokens[2]) + 1);
         if (new_value == NULL)
         {
-            sprintf(response, "ERROR");
+            sprintf(response, "ERROR\n");
             return strlen(response);
         }
 
@@ -663,26 +663,26 @@ int kvs_rbtree_protocol(char *msg, char *response)
 
         kv_free(node->value);
         node->value = new_value;
-        sprintf(response, "OK");
+        sprintf(response, "OK\n");
         return strlen(response);
     }
     if (strcmp(command, "EXIST") == 0)
     {
         if (count < 2 || tokens[1] == NULL)
         {
-            sprintf(response, "INVALID");
+            sprintf(response, "INVALID\n");
             return strlen(response);
         }
         char *key = tokens[1];
         rbtree_node *node = RBTREE_search(T, key);
         if (node == NULL)
         {
-            sprintf(response, "NO");
+            sprintf(response, "NO\n");
             return strlen(response);
         }
-        sprintf(response, "YES");
+        sprintf(response, "YES\n");
         return strlen(response);
     }
-    sprintf(response, "INVALID");
+    sprintf(response, "INVALID\n");
     return strlen(response);
 }

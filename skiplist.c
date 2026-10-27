@@ -376,7 +376,7 @@ int kvs_skiplist_protocol(char *msg, char *response)
     int count = skiplist_split_command(msg, tokens);
     if (count == 0 || tokens[0] == NULL) // 空输入保护
     {
-        sprintf(response, "ERROR");
+        sprintf(response, "ERROR\n");
         return strlen(response);
     }
     char *command = tokens[0];
@@ -385,95 +385,95 @@ int kvs_skiplist_protocol(char *msg, char *response)
 
         if (count < 3 || tokens[1] == NULL || tokens[2] == NULL)
         {
-            sprintf(response, "INVALID");
+            sprintf(response, "INVALID\n");
             return strlen(response);
         }
         int rc=skiplist_insert(sl,tokens[1],tokens[2]);
         if(rc<0)
         {
-            sprintf(response,"WRONG");
+            sprintf(response,"WRONG\n");
             return strlen(response);
         }
-        sprintf(response,"OK");
+        sprintf(response,"OK\n");
         return strlen(response);
     }
     if (strcmp(command, "GET") == 0)
     {
         if (count < 2 || tokens[1] == NULL)
         {
-            sprintf(response, "INVALID");
+            sprintf(response, "INVALID\n");
             return strlen(response);
         }
         char *key = tokens[1];
         char* get = skiplist_get(sl, key);
         if (get == NULL)
         {
-            sprintf(response, "INEXIST");
+            sprintf(response, "INEXIST\n");
             return strlen(response);
         }
         
-        sprintf(response, "%s", get);
+        sprintf(response, "%s\n", get);
         return strlen(response);
     }
     if (strcmp(command, "DEL") == 0)
     {
         if (count < 2 || tokens[1] == NULL)
         {
-            sprintf(response, "INVALID");
+            sprintf(response, "INVALID\n");
             return strlen(response);
         }
         char *key = tokens[1];
         int res=skiplist_erase(sl,key);
         if(res==0)
         {
-            sprintf(response, "INEXIST");
+            sprintf(response, "INEXIST\n");
             return strlen(response);            
         }
-        sprintf(response, "OK");
+        sprintf(response, "OK\n");
         return strlen(response);
     }
     if (strcmp(command, "MOD") == 0)
     {
     if (count < 3 || tokens[1] == NULL || tokens[2] == NULL)
     {
-        strcpy(response, "INVALID");
+        strcpy(response, "INVALID\n");
         return (int)strlen(response);
     }
 
     if (!skiplist_contains(sl, tokens[1]))
     {
-        strcpy(response, "INEXIST");
+        strcpy(response, "INEXIST\n");
         return (int)strlen(response);
     }
 
     if (skiplist_insert(sl, tokens[1], tokens[2]) < 0)
     {
-        strcpy(response, "ERROR");
+        strcpy(response, "ERROR\n");
         return (int)strlen(response);
     }
 
-    strcpy(response, "OK");
+    strcpy(response, "OK\n");
     return (int)strlen(response);
     }
     if (strcmp(command, "EXIST") == 0)
     {
         if (count < 2 || tokens[1] == NULL)
         {
-            sprintf(response, "INVALID");
+            sprintf(response, "INVALID\n");
             return strlen(response);
         }
         int flag=skiplist_contains(sl,tokens[1]);
         if(flag>0)
         {
-        sprintf(response, "YES");
+        sprintf(response, "YES\n");
         return strlen(response);
         }
         else
         {
-            sprintf(response,"NO");
+            sprintf(response,"NO\n");
             return strlen(response);
         }
     }
-    sprintf(response, "INVALID");
+    sprintf(response, "INVALID\n");
     return strlen(response);
 }
