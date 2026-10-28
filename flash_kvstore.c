@@ -8,7 +8,7 @@
 #define SKIPLIST_S 4
 
 
-#define NET_ENGINE PROACTOR
+#define NET_ENGINE  NTYCO
 #define STORE_ENGINE SKIPLIST_S
 
 
@@ -20,6 +20,9 @@
 
 #include "proactor.h"
 
+#elif NET_ENGINE == NTYCO
+
+#include "coroutinue.h"
 #endif
 
 #if STORE_ENGINE == ARRAY_S
@@ -82,6 +85,8 @@ sl=skiplist_create(0);
 reactor_start(port,protocol);
 #elif (NET_ENGINE == PROACTOR)
 proactor_start(port,protocol);
+#elif NET_ENGINE == NTYCO
+coroutinue_start( port, protocol);
 #endif
 
 
