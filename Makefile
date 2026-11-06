@@ -14,7 +14,7 @@ NET_SRC   := coroutinue.c
 NTYCO_SRC := nty_coroutine.c nty_schedule.c nty_epoll.c nty_socket.c
 
 # 存储层：四个引擎全部参与编译，由 STORE_ENGINE 决定实际用哪个
-STORE_SRC := array.c RBTREE.c hashmap.c skiplist.c kvmemctl.c
+STORE_SRC := array.c RBTREE.c hashmap.c skiplist.c kvmemctl.c kvbuf.c
 
 SRCS := flash_kvstore.c $(NET_SRC) $(NTYCO_SRC) $(STORE_SRC)
 HDRS := $(wildcard *.h)
@@ -29,7 +29,11 @@ all: $(TARGET)
 $(TARGET): $(SRCS) $(HDRS)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SRCS) -o $@ $(LDLIBS)
 
-clean:
-	rm -f $(TARGET)
+# kvbuf 的独立单测：只编 kvbuf.c + test_kvbuf.c，不碰服务器和网络层
+test_kvbuf: kvbuf.c test_kvbuf.c kvbuf.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) kvbuf.c test_kvbuf.c -o $@
 
-.PHONY: all clean
+clean:
+	rm -f $(TARGET) test_kvbuf
+
+.PHONY: all clean test_kvbuf
