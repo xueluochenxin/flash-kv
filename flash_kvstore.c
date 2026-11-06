@@ -67,7 +67,7 @@ int main(int argc,char **argv)
     return -1;
    }
    int port = atoi(argv[1]);
-   
+   kv_mempool_init();
 #if STORE_ENGINE == ARRAY_S
     kv_array_create(&kv_array);
 #elif STORE_ENGINE == RBTREE_S
@@ -105,4 +105,5 @@ hashmap_destroy(hash);
 #elif (STORE_ENGINE == SKIPLIST_S)
 skiplist_destroy(sl);
 #endif
+kv_mempool_destroy();
 }

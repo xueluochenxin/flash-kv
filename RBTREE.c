@@ -49,7 +49,7 @@ static void RBTREE_free_all(rbtree *T, rbtree_node *node)
     RBTREE_free_all(T, node->node.right);
     kv_free(node->key);
     kv_free(node->value);
-    free(node); /* free节点和key value*/
+    kv_free(node); /* free节点和key value*/
 }
 
 void RBTREE_destroy(rbtree *T)
@@ -323,7 +323,7 @@ int RBTREE_delete(rbtree *T, KEY_TYPE key)
     if (y_original_color == BLACK) /* 黑高被破坏,需要修复 */
         RBTREE_delete_fixup(T, x);
 
-    free(z);
+    kv_free(z);
     return 0;
 }
 
@@ -558,7 +558,7 @@ int kvs_rbtree_protocol(char *msg, char *response)
             {
                 kv_free(node->key);
                 kv_free(node->value);
-                free(node);
+                kv_free(node);
                 sprintf(response, "ERROR\n");
                 return strlen(response);
             }
@@ -569,7 +569,7 @@ int kvs_rbtree_protocol(char *msg, char *response)
             {
                 kv_free(node->key);
                 kv_free(node->value);
-                free(node);
+                kv_free(node);
                 sprintf(response, "WRONG\n");
                 return strlen(response);
             }

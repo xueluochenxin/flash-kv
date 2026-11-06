@@ -87,6 +87,7 @@ if(success==0)
     sprintf(output,"INEXIST\n");
     return -1;
 }
+    return -1;
 }
 
 int kv_array_del(struct kv_array_entry* kv_array,char **msg,char* output)
@@ -116,6 +117,7 @@ if(success==0)
     sprintf(output,"INEXIST\n");
     return -1;
 }
+    return -1;
 }
 
 
@@ -145,6 +147,7 @@ if(success==0)
     sprintf(output,"INEXIST\n");
     return -1;
 }
+    return -1;
 }
 
 int kv_array_exist(struct kv_array_entry* kv_array,char **msg,char* output)
@@ -170,6 +173,7 @@ if(success==0)
     sprintf(output,"NO\n");
     return -1;
 }
+    return -1;
 }
 
 int split_command(char* input,char* output[]) //返回值为解析出来的单词数目
