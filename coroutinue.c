@@ -49,10 +49,10 @@ static void deal_conn(void *arg)
                 continue;
             }
 
-            if (len + 64 > g_max_cmd_len)
+            if (len + 64 > g_max_cmd_len)//记录目前见过的最长文件，作为上界
                 g_max_cmd_len = len + 64;
             /* 应答缓冲：短应答最多几十字节，留 64 字节余量 */
-            if (kvbuf_reserve(&sbuf, len + 64) != 0)
+            if (kvbuf_reserve(&sbuf, g_max_cmd_len) != 0)
             {
                 err = 1;
                 break;

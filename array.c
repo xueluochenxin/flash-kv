@@ -176,32 +176,46 @@ if(success==0)
     return -1;
 }
 
-int split_command(char* input,char* output[]) //返回值为解析出来的单词数目
+int split_command(char *input, char *output[])
 {
-    int count = 0;
-    char *p = input;
+    int   count = 0;
+    char *p     = input;
 
-    while (*p) {
-        /* 1. 跳过所有空白 */
+    /* ── 前 2 个词：正常按空白切 ── */
+    while (*p && count < 2)
+    {
         while (*p && isspace((unsigned char)*p))
             p++;
 
-        /* 2. 到达字符串末尾，结束 */
         if (*p == '\0')
-            break;
+            return count;
 
-        /* 3. 记录这个单词的开始 */
         output[count++] = p;
 
-        /* 4. 向后扫描直到遇到空白 */
-        while (*p!='\0' && !isspace((unsigned char)*p))
+        while (*p != '\0' && !isspace((unsigned char)*p))
             p++;
 
-        /* 5. 把分隔符替换成 '\0'，以便单词独立成串 */
-        if (*p) {
+        if (*p)
+        {
             *p = '\0';
-            p++;              /* 跳到下一个位置继续找 */
+            p++;
         }
+    }
+
+    /* ── 第 3 个词：吃掉剩下的整段，只去掉首尾空白 ── */
+    while (*p && isspace((unsigned char)*p))
+        p++;
+
+    if (*p != '\0')
+    {
+        char *end;
+
+        output[count++] = p;
+
+        end = p + strlen(p);
+        while (end > p && isspace((unsigned char)end[-1]))
+            end--;
+        *end = '\0';
     }
 
     return count;
