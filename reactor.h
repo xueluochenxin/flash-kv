@@ -10,7 +10,7 @@
 #include <netinet/in.h> // sockaddr_in, htons, htonl, INADDR_ANY
 #include <arpa/inet.h>  // inet_ntop, inet_addr (打印客户端 IP)
 #include <sys/epoll.h>  // epoll_create1, epoll_ctl, epoll_wait, struct epoll_event
-
+#include "kvbuf.h"
 #define BUFFER_SIZE 1024
 #define CONN_SIZE 65536
 #define ADD_FLAG 1
@@ -30,15 +30,12 @@ int set_event(int fd, int event, int flag);
 int init_server(unsigned short port);
 int main_loop(struct epoll_event *Events, int sockfd);
 int reactor_start(int port,PROTOCOL handler);
-
+static void conn_close(int fd);
 struct conn
 {
     int fd;
-    char rbuffer[BUFFER_SIZE];
-    int rlen;
-    char wbuffer[BUFFER_SIZE];
-    int wlen;
-
+    kvbuf rbuf;
+    kvbuf sbuf;
     CALLBACK send_cb;
     union
     {

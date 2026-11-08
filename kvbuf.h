@@ -14,5 +14,7 @@ void kvbuf_destroy(kvbuf *b);
 void kvbuf_reset(kvbuf *b);
 int  kvbuf_reserve(kvbuf *b, size_t need);
 int  kvbuf_append(kvbuf *b, const char *data, size_t n);
-
+int kvbuf_process(kvbuf *rbuf, kvbuf *sbuf,
+                  int (*handler)(char *msg, char *response));
+void kv_note_cmd_len(size_t len);
 #endif

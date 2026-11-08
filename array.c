@@ -39,6 +39,24 @@ return 1;
 
 int kv_array_set(struct kv_array_entry* kv_array,char **msg,char* output)
 {
+/* key 已存在 → 只替换 value，不再新增一条 */
+for(int i=0;i<ARRAY_LENTH;i++)
+{
+    if(kv_array[i].key!=NULL&&strcmp(kv_array[i].key,msg[1])==0)
+    {
+        char *value=kv_malloc(strlen(msg[2])+1);
+        if(value==NULL)
+        {
+            sprintf(output,"WRONG\n");
+            return -1;
+        }
+        strcpy(value,msg[2]);
+        kv_free(kv_array[i].value);
+        kv_array[i].value=value;
+        sprintf(output,"OK\n");
+        return 1;
+    }
+}
 int index=0;
 int issucces=0;
 while(index<ARRAY_LENTH)
@@ -56,8 +74,20 @@ if(issucces==0)
     sprintf(output,"WRONG\n");
     return -1; 
 }
-    kv_array[index].key   = kv_malloc(strlen(msg[1]) + 1);  
+    kv_array[index].key = kv_malloc(strlen(msg[1]) + 1);
+    if(kv_array[index].key==NULL)
+    {
+        sprintf(output,"WRONG\n");
+        return -1;
+    }
     kv_array[index].value = kv_malloc(strlen(msg[2]) + 1);
+    if(kv_array[index].value==NULL)
+    {
+        kv_free(kv_array[index].key);
+        kv_array[index].key = NULL;
+        sprintf(output,"WRONG\n");
+        return -1;
+    }
     strcpy(kv_array[index].key, msg[1]);                     
     strcpy(kv_array[index].value, msg[2]);
 sprintf(output,"OK\n");
@@ -227,9 +257,27 @@ int kvs_array_protocol(char* msg,char* response)
         if(count == 0||tokens[0]==NULL)          // 空输入保护
     {
         sprintf(response,"ERROR\n");
-        return -1;
+        return strlen(response);
     }
 	char* command=tokens[0];
+
+    /* 参数个数检查：SET/MOD 要 key+value，GET/DEL/EXIST 只要 key */
+    if(strcmp(command,"SET")==0||strcmp(command,"MOD")==0)
+    {
+        if(count<3||tokens[1]==NULL||tokens[2]==NULL)
+        {
+            sprintf(response,"INVALID\n");
+            return (int)strlen(response);
+        }
+    }
+    else if(strcmp(command,"GET")==0||strcmp(command,"DEL")==0||strcmp(command,"EXIST")==0)
+    {
+        if(count<2||tokens[1]==NULL)
+        {
+            sprintf(response,"INVALID\n");
+            return (int)strlen(response);
+        }
+    }
 
     if(strcmp(command,"SET")==0)
 	{

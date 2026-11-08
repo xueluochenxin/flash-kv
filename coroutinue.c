@@ -1,6 +1,5 @@
 #include "coroutinue.h"
 #include "kvbuf.h"
-static size_t g_max_cmd_len = 256; // 记录一个目前见过的最长的长度，便于协议处理给返回值
 
 PROTOCOL protocol_handler = NULL;
 static void deal_conn(void *arg)
@@ -12,75 +11,26 @@ static void deal_conn(void *arg)
     kvbuf_init(&rbuf);
     kvbuf_init(&sbuf);
 
-    int err = 0;
-
-    while (!err)
-    {
-        /* ── 1. 保证 rbuf 尾部至少有 CONN_BUF_SIZE 字节可写 ── */
+    while (1) {
+        /* 1. 备空间 */
         if (kvbuf_reserve(&rbuf, rbuf.len + CONN_BUF_SIZE) != 0)
-        {
-            err = 1;
             break;
-        }
 
+        /* 2. 收数据 */
         int n = nty_recv(fd, rbuf.p + rbuf.len, rbuf.cap - rbuf.len, 0);
         if (n <= 0)
-            break; /* 0 = 对端关闭，<0 = 出错 */
+            break;
         rbuf.len += n;
 
-        /* ── 循环切出所有完整的行 ── */
-        size_t start = 0;
-
-        while (1)
-        {
-            char *base = rbuf.p + start;
-            size_t avail = rbuf.len - start;
-
-            char *nl = memchr(base, '\n', avail);
-            if (nl == NULL)
-                break; /* 还没收完整，回去继续 recv */
-
-            size_t len = (size_t)(nl - base);
-            *nl = '\0'; /* 原地截断：把 '\n' 换成 '\0' */
-
-            if (len == 0)
-            { /* 空行，跳过 */
-                start += 1;
-                continue;
-            }
-
-            if (len + 64 > g_max_cmd_len)//记录目前见过的最长文件，作为上界
-                g_max_cmd_len = len + 64;
-            /* 应答缓冲：短应答最多几十字节，留 64 字节余量 */
-            if (kvbuf_reserve(&sbuf, g_max_cmd_len) != 0)
-            {
-                err = 1;
-                break;
-            }
-
-            int num = protocol_handler(base, sbuf.p);
-            if (num <= 0)
-            {
-                err = 1;
-                break;
-            }
-            if (nty_send(fd, sbuf.p, num, 0) != num)
-            {
-                err = 1;
-                break;
-            }
-
-            start += len + 1; /* 连同 '\n' 一起消费掉 */
-        }
-
-        if (err)
+        /* 3. 切 + 处理（所有完整命令） */
+        if (kvbuf_process(&rbuf, &sbuf, protocol_handler) != 0)
             break;
 
-        /* ── 4. 把已经处理过的字节搬到开头，剩下的留到下次 ── */
-        if (start > 0)
-        {
-            memmove(rbuf.p, rbuf.p + start, rbuf.len - start);
-            rbuf.len -= start;
+        /* 4. 把这一批的应答一次性发出去 */
+        if (sbuf.len > 0) {
+            if (nty_send(fd, sbuf.p, sbuf.len, 0) != (ssize_t)sbuf.len)
+                break;
+            sbuf.len = 0;               /* 清空，下一批复用这块内存 */
         }
     }
 

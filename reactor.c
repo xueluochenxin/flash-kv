@@ -62,7 +62,13 @@ int init_server(unsigned short port) // socket bind listen
     set_nonblocking(sockfd);
     return sockfd;
 }
-
+static void conn_close(int fd)
+{
+    kvbuf_destroy(&conn_list[fd].rbuf);     /* ← 漏了这行就泄漏 + 脏数据 */
+    kvbuf_destroy(&conn_list[fd].sbuf);
+    epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);
+    close(fd);
+}
 int accept_cb(int fd)
 {
     while (1)
@@ -84,10 +90,8 @@ int accept_cb(int fd)
         conn_list[clientfd].fd = clientfd;
         conn_list[clientfd].r_action.recv_cb = recv_cb;
         conn_list[clientfd].send_cb = send_cb;
-        memset(conn_list[clientfd].rbuffer, 0, BUFFER_SIZE);
-        conn_list[clientfd].rlen = 0;
-        memset(conn_list[clientfd].wbuffer, 0, BUFFER_SIZE);
-        conn_list[clientfd].wlen = 0;
+        kvbuf_init(&conn_list[clientfd].rbuf);
+        kvbuf_init(&conn_list[clientfd].sbuf);
         set_event(clientfd, EPOLLIN, ADD_FLAG);
     }
     return 0;
@@ -95,69 +99,61 @@ int accept_cb(int fd)
 
 int recv_cb(int fd)
 {
-    memset(conn_list[fd].rbuffer, 0, BUFFER_SIZE);
-    int count = recv(fd, conn_list[fd].rbuffer, BUFFER_SIZE - 1, 0);
-    if (count == 0) // 断开连接
-    {
-        //printf("client disconnect:%d \n", fd);
-        close(fd);
-        epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);
-        return -1;
-    }
-    if (count < 0) // 出错
-    {
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
-        {
-            // 读完了，正常结束
-            return 0;
-        }
-        else // 出错了
-        {
-            perror("recv");
-            epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);
-            close(fd);
+    struct conn *c = &conn_list[fd];
+
+    /* ── 1. 一次把内核里的数据全读光 ── */
+    while (1) {
+        if (kvbuf_reserve(&c->rbuf, c->rbuf.len + BUFFER_SIZE) != 0) {
+            conn_close(fd);
             return -1;
         }
-    }
-    // recv不会自动加入\0  需要我们手动加进去
-    conn_list[fd].rbuffer[count] = '\0';
-    conn_list[fd].rlen = count;
-    
 
-    memset(conn_list[fd].wbuffer, 0, BUFFER_SIZE);
-    int responselength=g_protocol(conn_list[fd].rbuffer,conn_list[fd].wbuffer);
-    if(responselength<0)
-    {
+        int n = recv(fd, c->rbuf.p + c->rbuf.len,
+                     c->rbuf.cap - c->rbuf.len, 0);
+
+        if (n > 0) { c->rbuf.len += (size_t)n; continue; }
+        if (n == 0) { conn_close(fd); return -1; }        /* 对端关闭 */
+        if (errno == EAGAIN || errno == EWOULDBLOCK) break;  //没数据了
+        if (errno == EINTR) continue;
+        conn_close(fd);
         return -1;
     }
-    conn_list[fd].wlen=responselength;
-    set_event(fd,EPOLLOUT,MOD_FLAG);
-    return count;
+
+    /* ── 2. 切分 + 处理 ── */
+    if (kvbuf_process(&c->rbuf, &c->sbuf, g_protocol) != 0) {
+        conn_close(fd);                                   
+        return -1;
+    }
+
+    /* ── 3. 有应答就切到可写 ── */
+    if (c->sbuf.len > 0)
+        set_event(fd, EPOLLOUT, MOD_FLAG);
+
+    return 1;
 }
 
 int send_cb(int fd)// 返回值小于0表示send失败
 {  
-    int n=send(fd,conn_list[fd].wbuffer,conn_list[fd].wlen,0);
-      if (n <= 0)
-    {
-        // 发送失败或对端关闭
-        epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);
-        close(fd);
-        return -1;
+    struct conn *c = &conn_list[fd];
+
+    if (c->sbuf.len == 0) {                 /* 没东西发，回去收 */
+        set_event(fd, EPOLLIN, MOD_FLAG);
+        return 0;
     }
-        if (n < conn_list[fd].wlen)
-    {
-        // 只发了一部分
-        memmove(conn_list[fd].wbuffer,
-                conn_list[fd].wbuffer + n,
-                conn_list[fd].wlen - n);
-        conn_list[fd].wlen -= n;
-        set_event(fd, EPOLLOUT, MOD_FLAG);   
+
+    int n = send(fd, c->sbuf.p, c->sbuf.len, 0);
+    if (n <= 0) { conn_close(fd); return -1; }
+
+    if ((size_t)n < c->sbuf.len) {          /* 只发了一部分 */
+        memmove(c->sbuf.p, c->sbuf.p + n, c->sbuf.len - (size_t)n);
+        c->sbuf.len -= (size_t)n;
+        set_event(fd, EPOLLOUT, MOD_FLAG);  /* 继续等可写 */
         return n;
     }
-  conn_list[fd].wlen = 0;
-  set_event(fd,EPOLLIN,MOD_FLAG);
-  return n;
+
+    c->sbuf.len = 0;                        /* 全发完了 */
+    set_event(fd, EPOLLIN, MOD_FLAG);       /* 回去收数据 */
+    return n;
 }
 
 int main_loop(struct epoll_event *Events, int sockfd)
@@ -181,8 +177,7 @@ int main_loop(struct epoll_event *Events, int sockfd)
             {
                 if (Events[i].events & (EPOLLERR | EPOLLHUP)) //出错  挂断
                 {
-                    epoll_ctl(epfd, EPOLL_CTL_DEL, Events[i].data.fd, NULL);
-                    close(Events[i].data.fd);
+                    conn_close(Events[i].data.fd);
                     continue; //  处理完直接跳过，不要再走 IN/OUTS
                 }
                 if (Events[i].events & EPOLLIN)

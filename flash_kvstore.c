@@ -8,8 +8,15 @@
 #define SKIPLIST_S 4
 
 
+/* 由 Makefile 用 -DNET_ENGINE=... / -DSTORE_ENGINE=... 指定；
+   如果直接 gcc 编译没带 -D，就回退到这里的默认值 */
+#ifndef NET_ENGINE
 #define NET_ENGINE  NTYCO
+#endif
+
+#ifndef STORE_ENGINE
 #define STORE_ENGINE SKIPLIST_S
+#endif
 
 
 #if NET_ENGINE == REACTOR

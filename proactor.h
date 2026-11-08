@@ -12,7 +12,7 @@
 #include <arpa/inet.h>  // inet_ntop, inet_addr (打印客户端 IP)
 #include <sys/epoll.h>  // epoll_create1, epoll_ctl, epoll_wait, struct epoll_event
 #include <liburing.h>
-
+#include "kvbuf.h"
 
 #define ENTRIES_LENGTH 1024
 
@@ -27,10 +27,9 @@ typedef int (*PROTOCOL) (char* msg,char* response);
 
 struct conn_info{
 int fd;
-char readbuf[BUFFER_SIZE];
-int readlen;
-char writebuf[BUFFER_SIZE];
-int writelen;
+kvbuf sbuf;
+kvbuf rbuf;
+size_t soff;//记录已发送的字节数
 int event;
 
 };

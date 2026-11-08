@@ -72,8 +72,6 @@ int set_event_accept(struct io_uring *ring, int sockfd, struct sockaddr *addr,
     memset(info, 0, sizeof(struct conn_info));
     info->fd = sockfd;
     info->event = EVENT_ACCEPT;
-    info->readlen = 0;
-    info->writelen = 0;
 
     io_uring_prep_accept(sqe, sockfd, addr, addrlen, flags);
 
@@ -86,15 +84,18 @@ int set_event_recv(struct io_uring *ring, struct conn_info *info)
     {
         return -1;
     }
+    if (kvbuf_reserve(&info->rbuf, info->rbuf.len + BUFFER_SIZE) != 0)
+        return -1;
     struct io_uring_sqe *sqe;
     sqe = get_sqe(ring);
     if (sqe == NULL)
     {
         return -1;
     }
+    // 我们需要先reserve再提交，否则realloc 改变地址了，后续操作就全部是错误的
     info->event = EVENT_READ;
-    info->readlen = 0;
-    io_uring_prep_recv(sqe, info->fd, info->readbuf, BUFFER_SIZE - 1, 0);
+
+    io_uring_prep_recv(sqe, info->fd, info->rbuf.p + info->rbuf.len, info->rbuf.cap - info->rbuf.len, 0);
 
     io_uring_sqe_set_data(sqe, info);
     return 0;
@@ -105,7 +106,10 @@ int set_event_send(struct io_uring *ring, struct conn_info *info)
 
     if (info == NULL)
         return -1;
-
+    if (info->soff > info->sbuf.len)
+    {
+        return -1;
+    }
     sqe = get_sqe(ring);
     if (sqe == NULL)
         return -1;
@@ -114,8 +118,8 @@ int set_event_send(struct io_uring *ring, struct conn_info *info)
 
     io_uring_prep_send(sqe,
                        info->fd,
-                       info->writebuf,
-                       (size_t)info->writelen,
+                       info->sbuf.p + info->soff,
+                       info->sbuf.len - info->soff,
                        0);
     io_uring_sqe_set_data(sqe, info);
     return 0;
@@ -124,6 +128,9 @@ void conn_close(struct conn_info *info)
 {
     if (info == NULL)
         return;
+
+    kvbuf_destroy(&info->rbuf);
+    kvbuf_destroy(&info->sbuf);
     close(info->fd);
     // if(info->writebuf!=NULL)
     // {
@@ -197,7 +204,8 @@ int proactor_start(int port, PROTOCOL handler)
                     struct conn_info *info = (struct conn_info *)calloc(1, sizeof(struct conn_info));
                     if (info == NULL)
                     {
-                        return -1;
+                        close(res);
+                        continue;
                     }
                     // info->event=EVENT_READ;
                     info->fd = res;
@@ -207,10 +215,10 @@ int proactor_start(int port, PROTOCOL handler)
                     }
                     // printf("accept finished\n");
                 }
-                else
-                {
-                    //set_event_accept(&ring, sockfd, (struct sockaddr *)&client_addr, &lensock, 0);
-                }
+                // else
+                // {
+                //     //set_event_accept(&ring, sockfd, (struct sockaddr *)&client_addr, &lensock, 0);
+                // }
                 // free(result);
             }
             else if (result->event == EVENT_READ)
@@ -218,18 +226,25 @@ int proactor_start(int port, PROTOCOL handler)
 
                 if (res > 0) // res=实际读到的字节数
                 {
-                    result->readlen = res;
-                    result->readbuf[res] = '\0'; // 手动补\0
-                    int n = g_protocol(result->readbuf, result->writebuf);
-                    if (n <= 0 || n >= BUFFER_SIZE)
+                    result->rbuf.len += res;
+                    if (kvbuf_process(&result->rbuf, &result->sbuf, g_protocol) != 0)
                     {
                         conn_close(result);
                         continue;
                     }
-                    result->writelen=n;
-                    if(set_event_send(&ring, result)!=0)
+
+                    if (result->sbuf.len > 0)
                     {
-                        conn_close(result);
+                        result->soff = 0;
+                        if (set_event_send(&ring, result) != 0)
+                            conn_close(result);
+                    }
+                    else
+                    {
+                        /* 只收到半条命令，没有应答可发 —— 必须重新挂一个 recv，
+                           否则这条连接就再没有任何在途操作了，会永远卡住 */
+                        if (set_event_recv(&ring, result) != 0)
+                            conn_close(result);
                     }
                     // printf("read : %s\n",result->buf);
                     // free(result);
@@ -246,18 +261,30 @@ int proactor_start(int port, PROTOCOL handler)
             }
             else if (result->event == EVENT_WRITE)
             {
-                  if(res<=0)
-                  {
+                if (res <= 0)
+                {
                     conn_close(result);
                     continue;
-                  }
-                  else
-                  {
-                    if(set_event_recv(&ring,result)!=0)
+                }
+                else
+                {
+                    result->soff += res;
+                    if (result->soff < result->sbuf.len)
                     {
-                        conn_close(result);
+                        /* 还没发完，续发 */
+                        if (set_event_send(&ring, result) != 0)
+                            conn_close(result);
                     }
-                  }
+                    else // 发完了
+                    {
+                        /* 发完了，清空，回去收 */
+                        result->sbuf.len = 0;
+                        result->soff = 0;
+
+                        if (set_event_recv(&ring, result) != 0)
+                            conn_close(result);
+                    }
+                }
             }
         }
         io_uring_cq_advance(&ring, nready);
