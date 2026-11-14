@@ -4,6 +4,14 @@
  * DEL key       //OK    INEXIST
  * MOD key value //OK    INEXIST
  * EXIST key     //YES   NO
+ 写：  SETB <key> <vlen>\n
+       <vlen 字节原始内容>
+        → OK\n        （成功）
+        → INVALID\n   （头部语法错，或正文里含 '\0'）
+
+读：  GETB <key>\n
+        → <vlen>\n<vlen 字节原始内容>
+        → INEXIST\n
 
 如果是无效输入   INVALIDE
 
@@ -32,3 +40,5 @@
 //11.7 实现value能存大值还能带空格，存大值就是我们实现了kvbuf，循环读取缓冲区的值，之后循环切出来一条条命令
 然后用protocol解析命令，用一个变量存命令的最大值，作为send缓冲区的长度，然后send出去
 之后修改protocol，只切两个空格出来，最后的一个大部分全作为value，这样就可以带空格了
+// 11.14key不能带有空格
+为了支持存入文章，新增命令格式
