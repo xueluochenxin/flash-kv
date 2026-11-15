@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <ctype.h>
 #include "kvmemctl.h"
-
+#include "kv_foreach.h"
 
 //
 skiplist* sl=NULL;
@@ -320,7 +320,13 @@ int skiplist_foreach(const skiplist *s, skiplist_iter_fn fn, void *userdata)
     }
     return 0;
 }
+int kvs_skiplist_foreach(kv_visit_fn fn, void *arg)
+{
+    if (sl == NULL || fn == NULL)
+        return -1;
 
+    return skiplist_foreach(sl, fn, arg);   /* 库已有，直接转发 */
+}
 int skiplist_set_p(skiplist *s, int p_q5)
 {
     if (!s || p_q5 < 1 || p_q5 > 32) {

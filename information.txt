@@ -12,7 +12,8 @@
 读：  GETB <key>\n
         → <vlen>\n<vlen 字节原始内容>
         → INEXIST\n
-
+SAVE\n
+保存一次快照
 如果是无效输入   INVALIDE
 
 存储引擎 RBTREE ARRAY HASHMAP SKIPLIST  //KV  INIT DESTORY
@@ -42,3 +43,4 @@
 之后修改protocol，只切两个空格出来，最后的一个大部分全作为value，这样就可以带空格了
 // 11.14key不能带有空格
 为了支持存入文章，新增命令格式
+//

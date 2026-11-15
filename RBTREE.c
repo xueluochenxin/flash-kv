@@ -3,6 +3,7 @@
 #include <string.h>
 #include <ctype.h>
 #include "kvmemctl.h"
+#include "kv_foreach.h"
 // 全局变量
 rbtree *T = NULL;
 /* ---------- 内部函数:全部 static,不污染全局符号表 ---------- */
@@ -697,4 +698,28 @@ int kvs_rbtree_protocol(char *msg, char *response)
     }
     sprintf(response, "INVALID\n");
     return strlen(response);
+}
+/* 中序遍历：左 → 根 → 右 */
+static int rb_walk(rbtree *t, rbtree_node *x, kv_visit_fn fn, void *arg)
+{
+    if (x == NULL || x == t->nil)
+        return 0;
+
+    int rc = rb_walk(t, x->node.left, fn, arg);
+    if (rc != 0)
+        return rc;
+
+    rc = fn(x->key, x->value, arg);
+    if (rc != 0)
+        return rc;
+
+    return rb_walk(t, x->node.right, fn, arg);
+}
+
+int kvs_rbtree_foreach(kv_visit_fn fn, void *arg)
+{
+    if (T == NULL || fn == NULL)
+        return -1;
+
+    return rb_walk(T, T->root, fn, arg);
 }

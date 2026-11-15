@@ -6,6 +6,7 @@
 #include <ctype.h>
 #include <stdio.h>
 #include "kvmemctl.h"
+#include "kv_foreach.h"
 /* ================== 内部常量与类型(不进头文件) ================== */
 
 #define HM_EMPTY   0   /* 空桶 */
@@ -312,7 +313,13 @@ int hashmap_foreach(const hashmap *m, hashmap_iter_fn fn, void *userdata)
     }
     return 0;
 }
+int kvs_hash_foreach(kv_visit_fn fn, void *arg)
+{
+    if (hash == NULL || fn == NULL)
+        return -1;
 
+    return hashmap_foreach(hash, fn, arg);
+}
 size_t hashmap_keys(const hashmap *m, KEY_TYPE *out_keys)
 {
     if (!m || !out_keys) return 0;

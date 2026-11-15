@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
+#include "kv_foreach.h"
 struct kv_array_entry* kv_array=NULL;
 
 
@@ -300,4 +301,20 @@ int kvs_array_protocol(char* msg,char* response)
 		kv_array_exist(kv_array,tokens,response);
 	}
     return strlen(response);
+}
+int kvs_array_foreach(kv_visit_fn fn, void *arg)
+{
+    if (kv_array == NULL || fn == NULL)
+        return -1;
+
+    for (int i = 0; i < ARRAY_LENTH; i++)
+    {
+        if (kv_array[i].key == NULL || kv_array[i].value == NULL)
+            continue;                       /* 空槽跳过 */
+
+        int rc = fn(kv_array[i].key, kv_array[i].value, arg);
+        if (rc != 0)
+            return rc;                      /* 回调要求提前终止 */
+    }
+    return 0;
 }

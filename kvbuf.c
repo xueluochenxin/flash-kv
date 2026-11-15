@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
 /* ── 应答缓冲的上界：见过的最大命令长度 ── */
 static size_t g_max_cmd_len = 256;
 static kvbuf g_linebuf; // 给protocol解析用的
@@ -239,17 +240,28 @@ int kvbuf_process(kvbuf *rbuf, kvbuf *sbuf,
                     return -1;
                 if (kvbuf_append(sbuf, g_tmpbuf.p, vlen) != 0)
                     return -1;
+                if (kvbuf_append(sbuf, "\n", 1) != 0)
+                    return -1;
             }
 
             start += len + 1;
             continue;
         }
         *nl = '\0'; /* 原地截断 */
-        if (len == 0)
-        { /* 空行 */
-            start += 1;
+        size_t l = 0, r = len;
+        while (l < r && isspace((unsigned char)base[l]))
+            l++;                        /* 跳过前导空白 */
+        while (r > l && isspace((unsigned char)base[r - 1]))
+            r--;                        /* 去掉尾部空白（含 '\r'） */
+
+        if (l == r)                     /* 空行 / 全是空白 */
+        {
+            start += len + 1;
             continue;
         }
+
+        base += l;                      /* ← 只改局部指针，不影响 start */
+        size_t clen = r - l;            /* 裁剪后的长度 */
 
         /* 2. 更新应答上界 */
         kv_note_cmd_len(len);
