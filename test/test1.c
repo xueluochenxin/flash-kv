@@ -24,10 +24,10 @@ int main(void)
     
 
     
-    const char *request2 = "GETB AAA\n";
+    const char *request1 = "SET A 123456789\nSET B abcdefg\nSAVE\n   SET C a1s0d2\n";
 
-    /* ── 核心测试逻辑：连续发送，强行制造 TCP 粘包 ── */
-    send(sockfd, request2, strlen(request2), 0);
+   
+    send(sockfd, request1, strlen(request1), 0);
 
 
 

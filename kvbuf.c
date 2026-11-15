@@ -7,6 +7,35 @@
 static size_t g_max_cmd_len = 256;
 static kvbuf g_linebuf; // 给protocol解析用的
 static kvbuf g_tmpbuf;  // 接受引擎的返回
+static kv_aof_fn g_aof_hook = NULL;//kvbuf.c不负责写，文件路径等都保存在flash_kvstore里面。这里只负责通知，所以叫钩子
+void kv_set_aof_hook(kv_aof_fn fn)
+{
+    g_aof_hook = fn;
+}
+static int kv_is_write_cmd(const char *base, size_t len)
+{
+    size_t i = 0;
+
+    while (i < len && isspace((unsigned char)base[i]))
+        i++; /* 跳前导空白 */
+
+    const char *p = base + i;
+    size_t left = len - i;
+
+    if (left >= 3 && memcmp(p, "SET", 3) == 0 &&
+        (left == 3 || isspace((unsigned char)p[3])))//至少三个字节，set后面是空白
+        return 1;
+
+    if (left >= 3 && memcmp(p, "MOD", 3) == 0 &&
+        (left == 3 || isspace((unsigned char)p[3])))
+        return 1;
+
+    if (left >= 3 && memcmp(p, "DEL", 3) == 0 &&
+        (left == 3 || isspace((unsigned char)p[3])))
+        return 1;
+
+    return 0;
+}
 static int kvbuf_terminate(kvbuf *b)
 {
     if (kvbuf_reserve(b, b->len + 1) != 0)
@@ -146,13 +175,13 @@ int kvbuf_process(kvbuf *rbuf, kvbuf *sbuf,
                 if (kvbuf_append(sbuf, "INVALID\n", 8) != 0)
                     return -1;
                 start += len + 1;
-                continue;//头部处理完毕，继续循环去recv value
+                continue; // 头部处理完毕，继续循环去recv value
             }
 
             /*  正文还没收全 → break，start 绝对不能动 */
-            size_t need = len + 1 + vlen;//need长度就是head+换行符+key的长度，也就是需要的总长度
+            size_t need = len + 1 + vlen; // need长度就是head+换行符+key的长度，也就是需要的总长度
             if (avail < need)
-                break;  //继续去recv
+                break; // 继续去recv
 
             /*  正文含 '\0'：当前不支持，明确报错，别静默截断 */
             if (memchr(base + len + 1, '\0', vlen) != NULL)
@@ -164,7 +193,8 @@ int kvbuf_process(kvbuf *rbuf, kvbuf *sbuf,
                     start += 1;
                 continue;
             }
-
+            if (g_aof_hook != NULL)
+                g_aof_hook(base, need);
             /*  组装成一条普通命令："SET <key> <正文>"，引擎无感知 */
             g_linebuf.len = 0;
             if (kvbuf_append(&g_linebuf, "SET ", 4) != 0)
@@ -247,21 +277,23 @@ int kvbuf_process(kvbuf *rbuf, kvbuf *sbuf,
             start += len + 1;
             continue;
         }
+        if (g_aof_hook != NULL && kv_is_write_cmd(base, len))
+        g_aof_hook(base, len + 1);      /* 含 '\n'，原样 */
         *nl = '\0'; /* 原地截断 */
         size_t l = 0, r = len;
         while (l < r && isspace((unsigned char)base[l]))
-            l++;                        /* 跳过前导空白 */
+            l++; /* 跳过前导空白 */
         while (r > l && isspace((unsigned char)base[r - 1]))
-            r--;                        /* 去掉尾部空白（含 '\r'） */
+            r--; /* 去掉尾部空白（含 '\r'） */
 
-        if (l == r)                     /* 空行 / 全是空白 */
+        if (l == r) /* 空行 / 全是空白 */
         {
             start += len + 1;
             continue;
         }
 
-        base += l;                      /* ← 只改局部指针，不影响 start */
-        size_t clen = r - l;            /* 裁剪后的长度 */
+        base += l;           /* ← 只改局部指针，不影响 start */
+        size_t clen = r - l; /* 裁剪后的长度 */
 
         /* 2. 更新应答上界 */
         kv_note_cmd_len(len);
