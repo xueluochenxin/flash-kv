@@ -1,0 +1,17 @@
+从节点向主节点发送SYNC来建立一开始这个特殊的链接
+一开始是考虑用一个全局变量来维护fd，但协程可能会出现错误的yield的情况，所以不得不进行更改
+协程 A:  g_current_fd = 7
+         kvbuf_process
+             切出 "SET X 1" → 广播 → nty_send 发不完 → yield
+                                        ↓
+协程 B:  g_current_fd = 9
+         kvbuf_process（它自己的命令）
+         g_current_fd = -1               ← 清成了 -1
+                                        ↓
+协程 A:  恢复，继续处理同一批里的下一条
+         如果下一条正好是 "SYNC"
+            → g_sync_hook() 读到 g_current_fd == -1
+            → 返回 -1
+            → kvbuf_process 返回 -1
+            → 连接被断开 ❌
+所以改了很多函数签名，把这些fd都传进去。
