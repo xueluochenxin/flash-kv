@@ -67,5 +67,5 @@ void RBTREE_inorder(rbtree *T, rbtree_node *node); /* 中序遍历打印 */
 
 int kvs_rbtree_protocol(char* msg,char* response);
 int rb_split_command(char* input,char* output[]); //返回值为解析出来的单词数目
-
+void rbtree_clear(rbtree *T);
 #endif /* _RBTREE_H_ */

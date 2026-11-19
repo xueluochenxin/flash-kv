@@ -112,3 +112,7 @@ ntyco：连接状态在 deal_conn 的协程栈上 → kv_net_push 里有 fd 就�
 reactor：连接状态在 conn_list[fd] → 全局数组，直接索引
 proactor：连接状态是 malloc 出来的 conn_info 对象，【没有 fd → 对象 的表】
         而且 ring 是 proactor_start 的局部变量
+
+//
+make flash_kv           # 只编主节点
+make flash_kv_slave     # 只编从节点

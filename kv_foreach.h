@@ -26,4 +26,5 @@ int kvs_array_foreach   (kv_visit_fn fn, void *arg);
 /* 按 STORE_ENGINE 分发（实现在 flash_kvstore.c） */
 int kv_store_foreach(kv_visit_fn fn, void *arg);
 void kv_store_clear(void);//清空整个数据集
+void kv_store_engine_create(void);
 #endif /* KV_FOREACH_H */

@@ -114,6 +114,20 @@ void kv_store_clear(void)
     skiplist_clear(sl);
 #endif
 }
+void kv_store_engine_create(void)
+{
+#if STORE_ENGINE == ARRAY_S
+    kv_array_create(&kv_array);
+#elif STORE_ENGINE == RBTREE_S
+    T = RBTREE_create();
+#elif (STORE_ENGINE == HASH_S)
+    hash = hashmap_create(0);
+#elif (STORE_ENGINE == SKIPLIST_S)
+    sl = skiplist_create(0);
+#endif
+}
+
+#ifndef KV_SLAVE_BUILD        /* 从节点构建时，这个 main 不参与编译 */
 int main(int argc, char **argv)
 {
     if (argc != 2)
@@ -128,15 +142,7 @@ int main(int argc, char **argv)
         return -1;
     }
 
-#if STORE_ENGINE == ARRAY_S
-    kv_array_create(&kv_array);
-#elif STORE_ENGINE == RBTREE_S
-    T = RBTREE_create();
-#elif (STORE_ENGINE == HASH_S)
-    hash = hashmap_create(0);
-#elif (STORE_ENGINE == SKIPLIST_S)
-    sl = skiplist_create(0);
-#endif
+    kv_store_engine_create();
 
     if (kv_load(SNAPSHOT, protocol) != 0)
     {
@@ -176,3 +182,4 @@ int main(int argc, char **argv)
 #endif
     kv_mempool_destroy();
 }
+#endif

@@ -62,6 +62,14 @@ void RBTREE_destroy(rbtree *T)
     free(T);
 }
 
+void rbtree_clear(rbtree *T)
+{
+    if (T == NULL)
+        return;
+
+    RBTREE_free_all(T, T->root);   /* 复用已有的递归释放，只释放业务节点 */
+    T->root = T->nil;              /* 根指回哨兵 = 空树 */
+}
 /* ==================== 查找 ==================== */
 
 rbtree_node *RBTREE_search(rbtree *T, KEY_TYPE key)
