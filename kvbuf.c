@@ -5,9 +5,15 @@
 #include <ctype.h>
 /* ── 应答缓冲的上界：见过的最大命令长度 ── */
 static size_t g_max_cmd_len = 256;
-static kvbuf g_linebuf; // 给protocol解析用的
-static kvbuf g_tmpbuf;  // 接受引擎的返回
-static kv_aof_fn g_aof_hook = NULL;//kvbuf.c不负责写，文件路径等都保存在flash_kvstore里面。这里只负责通知，所以叫钩子
+static kvbuf g_linebuf;             // 给protocol解析用的
+static kvbuf g_tmpbuf;              // 接受引擎的返回
+static kv_aof_fn g_aof_hook = NULL; // kvbuf.c不负责写，文件路径等都保存在flash_kvstore里面。这里只负责通知，所以叫钩子
+static kv_sync_fn g_sync_hook = NULL;
+
+void kv_set_sync_hook(kv_sync_fn fn)
+{
+    g_sync_hook = fn;
+}
 void kv_set_aof_hook(kv_aof_fn fn)
 {
     g_aof_hook = fn;
@@ -23,7 +29,7 @@ static int kv_is_write_cmd(const char *base, size_t len)
     size_t left = len - i;
 
     if (left >= 3 && memcmp(p, "SET", 3) == 0 &&
-        (left == 3 || isspace((unsigned char)p[3])))//至少三个字节，set后面是空白
+        (left == 3 || isspace((unsigned char)p[3]))) // 至少三个字节，set后面是空白
         return 1;
 
     if (left >= 3 && memcmp(p, "MOD", 3) == 0 &&
@@ -148,7 +154,7 @@ void kv_note_cmd_len(size_t len)
 }
 
 int kvbuf_process(kvbuf *rbuf, kvbuf *sbuf,
-                  int (*handler)(char *msg, char *response))
+                  int (*handler)(char *msg, char *response), int conn_fd)
 {
     size_t start = 0;
 
@@ -277,9 +283,18 @@ int kvbuf_process(kvbuf *rbuf, kvbuf *sbuf,
             start += len + 1;
             continue;
         }
+
+        if (g_sync_hook != NULL && len >= 4 && memcmp(base, "SYNC", 4) == 0 && (len == 4 || isspace((unsigned char)base[4])))
+        {
+            if (g_sync_hook(conn_fd,sbuf) != 0)
+                return -1;
+            start += len + 1;
+            continue;
+        }
+        
         if (g_aof_hook != NULL && kv_is_write_cmd(base, len))
-        g_aof_hook(base, len + 1);      /* 含 '\n'，原样 */
-        *nl = '\0'; /* 原地截断 */
+            g_aof_hook(base, len + 1); /* 含 '\n'，原样 */
+        *nl = '\0';                    /* 原地截断 */
         size_t l = 0, r = len;
         while (l < r && isspace((unsigned char)base[l]))
             l++; /* 跳过前导空白 */

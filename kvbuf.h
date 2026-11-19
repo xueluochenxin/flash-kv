@@ -21,7 +21,7 @@ void kv_note_cmd_len(size_t len);
 //
 typedef void (*kv_aof_fn)(const char *raw, size_t len);
 void kv_set_aof_hook(kv_aof_fn fn);      /* 传 NULL 取消 */
-typedef int (*kv_sync_fn)(int conn_fd);
+typedef int (*kv_sync_fn)(int conn_fd,kvbuf* out);
 void kv_set_sync_hook(kv_sync_fn fn);   /* 传 NULL 取消 */
 
 //protocol 的第二个参数 response 指向一块按"最长命令长度"预留的缓冲。

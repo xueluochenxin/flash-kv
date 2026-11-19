@@ -1,5 +1,5 @@
 #include "reactor.h"
-
+#include "kv_net.h"
 
 int epfd = -1;
 struct conn conn_list[CONN_SIZE] = {0};
@@ -66,8 +66,32 @@ static void conn_close(int fd)
 {
     kvbuf_destroy(&conn_list[fd].rbuf);     /* ← 漏了这行就泄漏 + 脏数据 */
     kvbuf_destroy(&conn_list[fd].sbuf);
+    conn_list[fd].fd = -1;  
     epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);
     close(fd);
+}
+int kv_net_push(int fd, const char *buf, size_t len)
+{
+    if (fd < 0 || fd >= CONN_SIZE || len == 0)
+        return -1;
+
+    struct conn *c = &conn_list[fd];
+    if (c->fd != fd)                  /* 不是活连接 */
+        return -1;
+
+    if (kvbuf_append(&c->sbuf, buf, len) != 0)
+        return -1;
+
+    /* 切到"可写"，send_cb 会把 sbuf 发完（含部分发送续发） */
+    if (set_event(fd, EPOLLOUT, MOD_FLAG) != 0)
+        return -1;
+    return 0;
+}
+
+void kv_net_close(int fd)
+{
+    if (fd >= 0 && fd < CONN_SIZE)
+        conn_close(fd);
 }
 int accept_cb(int fd)
 {
@@ -120,7 +144,7 @@ int recv_cb(int fd)
     }
 
     /* ── 2. 切分 + 处理 ── */
-    if (kvbuf_process(&c->rbuf, &c->sbuf, g_protocol) != 0) {
+    if (kvbuf_process(&c->rbuf, &c->sbuf, g_protocol,fd) != 0) {
         conn_close(fd);                                   
         return -1;
     }

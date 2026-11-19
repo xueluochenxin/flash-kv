@@ -101,3 +101,14 @@ kvbuf_process完整流程
                                 ▼
               memmove：把 [start, len) 挪到开头
               return 0
+//SYNC
+//11.19
+ntyco 怕"被打断"→ 双缓冲。 
+reactor 不怕（单写者 + send 不被打断）→ 只管入队。 
+proactor 怕"内核还拿着旧地址"→ 用 event 控制"什么时候允许提交"。
+
+
+ntyco：连接状态在 deal_conn 的协程栈上 → kv_net_push 里有 fd 就够了（outq[fd]）
+reactor：连接状态在 conn_list[fd] → 全局数组，直接索引
+proactor：连接状态是 malloc 出来的 conn_info 对象，【没有 fd → 对象 的表】
+        而且 ring 是 proactor_start 的局部变量

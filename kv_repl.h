@@ -24,4 +24,6 @@ int kv_repl_slave_start(const char *master_ip, int master_port,
 /* 本进程是不是从节点。protocol() 用它做只读保护 */
 int kv_repl_is_slave(void);
 
+
+int kv_repl_is_slave_fd(int fd);
 #endif /* KV_REPL_H */

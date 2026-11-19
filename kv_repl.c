@@ -6,32 +6,25 @@
 
 #include "kvbuf.h"
 #include "kv_foreach.h"
-
-#if NET_ENGINE == NTYCO
-
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include "coroutinue.h"
-
+#include "kv_net.h"
 /* ══════════ 从节点表 ══════════ */
 
 #define MAX_SLAVES 8
-
 typedef struct {
     int   fd;        /* 从节点连接 */
-    int   syncing;   /* 1 = 正在发全量，增量先缓存；0 = 正常直发 */
-    kvbuf pending;   /* 全量期间积压的增量（协程版里通常是空的） */
 } slave_t;
 
 static slave_t g_slaves[MAX_SLAVES];
 static int     g_slave_count = 0;
+//不同网络层通用
 
-/* ══════════ 从节点模式的状态 ══════════ */
 
-static int  g_is_slave    = 0;
-static char g_master_ip[64] = {0};
-static int  g_master_port   = 0;
-static int (*g_protocol)(char *msg, char *response) = NULL;
+
+
+
+
+
+
 
 /* ══════════ 主节点：发全量 ══════════ */
 
@@ -63,49 +56,42 @@ static int repl_full_sync(int fd)
         return -1;
     }
 
-    if (buf.len > 0 &&
-        nty_send(fd, buf.p, buf.len, 0) != (ssize_t)buf.len) {
-        kvbuf_destroy(&buf);
-        return -1;
-    }
+    int rc = 0;
+    if (buf.len > 0)
+        rc = kv_net_push(fd, buf.p, buf.len);    /*  原来的 nty_send */
 
     kvbuf_destroy(&buf);
-    return 0;
+    return rc;
+
 }
 
-/* SYNC 命令的执行体：登记从节点 → 发全量 → 补发期间积压的增量 */
-static int repl_sync_hook(int fd)
+/* SYNC 命令的执行体：登记从节点 → 推全量 */
+static int repl_sync_hook(int conn_fd,kvbuf *out)
 {
-    if (fd < 0)                        return -1;
-    if (g_slave_count >= MAX_SLAVES)   return -1;
+    (void)out;   //显式告诉编译器“这个参数我是故意不用的”
+                        /* 全量走 kv_net_push，不再用 sbuf */
 
-    /* 同一个 fd 重复发 SYNC：已登记过就忽略，别重复登记 */
+    if (conn_fd < 0)                 return -1;
+    if (g_slave_count >= MAX_SLAVES) return -1;
+
+    /* 同一个 fd 重复发 SYNC：已登记过就忽略 */
     for (int i = 0; i < g_slave_count; i++)
-        if (g_slaves[i].fd == fd) return 0;
+        if (g_slaves[i].fd == conn_fd) return 0;
 
-    /* ① 先登记并标记：之后到来的增量会进 pending，不会插进全量流 */
-    slave_t *s = &g_slaves[g_slave_count++];
-    s->fd      = fd;
-    s->syncing = 1;
-    kvbuf_init(&s->pending);
+    /* ① 先登记。登记到这里只做一次赋值，不 yield，
+          所以不会有广播漏在这个窗口里 */
+    g_slaves[g_slave_count++].fd = conn_fd;
 
-    /* ② 发全量（nty_send 可能 yield，别的协程的写入会进 pending） */
-    if (repl_full_sync(fd) != 0) {
-        kvbuf_destroy(&s->pending);
+    /* ② 再推全量。push 内部 yield 期间到来的广播会追加到同一条队列 */
+    if (repl_full_sync(conn_fd) != 0) {
         g_slave_count--;
         return -1;
     }
 
-    /* ③ 补发积压的增量，然后切回"正常直发" */
-    if (s->pending.len > 0) {
-        nty_send(fd, s->pending.p, s->pending.len, 0);
-        s->pending.len = 0;
-    }
-    s->syncing = 0;
-
-    printf("[master] 从节点 fd=%d 全量同步完成\n", fd);
-    return 0;
+    printf("[master] 从节点 fd=%d 全量已入队\n", conn_fd);
+    return 0;                    
 }
+
 
 int kv_repl_master_init(void)
 {
@@ -115,22 +101,15 @@ int kv_repl_master_init(void)
 
 /* ══════════ 主节点：广播增量 ══════════ */
 
+/* 把一条写命令推给所有从节点 */
 void kv_repl_broadcast(const char *raw, size_t len)
 {
     for (int i = 0; i < g_slave_count; ) {
-        slave_t *s = &g_slaves[i];
-
-        if (s->syncing) {                       /* 全量中 → 先缓存，防插队 */
-            kvbuf_append(&s->pending, raw, len);
-            i++;
-            continue;
-        }
-
-        if (nty_send(s->fd, raw, len, 0) != (ssize_t)len) {
-            printf("[master] 从节点 fd=%d 断开\n", s->fd);
-            kvbuf_destroy(&s->pending);
-            g_slaves[i] = g_slaves[--g_slave_count];  /* 队尾填坑 */
-            continue;                                 /* 不 i++，重查该位置 */
+        if (kv_net_push(g_slaves[i].fd, raw, len) != 0) {
+            printf("[master] 从节点 fd=%d 断开\n", g_slaves[i].fd);
+            kv_net_close(g_slaves[i].fd);
+            g_slaves[i] = g_slaves[--g_slave_count];
+            continue;                 /* 不 i++，重查该位置 */
         }
         i++;
     }
@@ -142,13 +121,30 @@ void kv_repl_on_close(int fd)
         if (g_slaves[i].fd != fd) { i++; continue; }
 
         printf("[master] 从节点 fd=%d 关闭，移出列表\n", fd);
-        kvbuf_destroy(&g_slaves[i].pending);
         g_slaves[i] = g_slaves[--g_slave_count];
         /* 不移 i：换过来的元素也要检查 */
     }
 }
 
+int kv_repl_is_slave_fd(int fd)
+{
+    for (int i = 0; i < g_slave_count; i++)
+        if (g_slaves[i].fd == fd) return 1;
+    return 0;
+}
+
+/*网络层协议判断*/
+#if NET_ENGINE == NTYCO
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include "coroutinue.h"
+static int  g_is_slave    = 0;
+static char g_master_ip[64] = {0};
+static int  g_master_port   = 0;
+static int (*g_protocol)(char *msg, char *response) = NULL;
 /* ══════════ 从节点：拉数据 + 重放 ══════════ */
+
+
 
 /*
  * 从节点主循环：连主节点 → 发 SYNC → 清库 → 持续接收重放 → 断开重连。
@@ -232,20 +228,15 @@ int kv_repl_is_slave(void) { return g_is_slave; }
 
 #else  /* ══════ 非协程层：全部空实现，保证编译通过 ══════ */
 
-int kv_repl_master_init(void) { return 0; }
-
-void kv_repl_broadcast(const char *raw, size_t len) { (void)raw; (void)len; }
-
-void kv_repl_on_close(int fd) { (void)fd; }
-
 int kv_repl_slave_start(const char *ip, int port,
                         int (*handler)(char *msg, char *response))
 {
     (void)ip; (void)port; (void)handler;
     fprintf(stderr, "[repl] 主从同步只在 NET=ntyco 下可用，--slave 已忽略\n");
-    return 0;
+    return -1;
 }
 
 int kv_repl_is_slave(void) { return 0; }
+
 
 #endif /* NET_ENGINE == NTYCO */

@@ -44,5 +44,6 @@ struct io_uring_sqe *get_sqe(struct io_uring *ring);
 
 void conn_close(struct conn_info *info);
 int proactor_start(int port, PROTOCOL handler);
-
+void kv_net_close(int fd);
+int kv_net_push(int fd, const char *buf, size_t len);
 #endif

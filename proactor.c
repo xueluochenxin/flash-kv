@@ -4,6 +4,11 @@
 #include "proactor.h"
 
 PROTOCOL g_protocol = NULL;
+#include "kv_net.h"
+#include "kv_repl.h" 
+static struct io_uring  *g_ring = NULL;                    /* ring 的全局引用 */
+static struct conn_info *g_conns[CONN_SIZE] = {0};         /* fd → 连接对象 */
+
 
 int set_nonblocking(int fd)
 {
@@ -129,6 +134,9 @@ void conn_close(struct conn_info *info)
     if (info == NULL)
         return;
 
+    if (info->fd >= 0 && info->fd < CONN_SIZE)
+    g_conns[info->fd] = NULL; 
+    
     kvbuf_destroy(&info->rbuf);
     kvbuf_destroy(&info->sbuf);
     close(info->fd);
@@ -142,7 +150,37 @@ void conn_close(struct conn_info *info)
     // }     这是数组，不是malloc出来的，不需要单独free
     free(info);
 }
+int kv_net_push(int fd, const char *buf, size_t len)
+{
+    if (fd < 0 || fd >= CONN_SIZE || len == 0)
+        return -1;
 
+    struct conn_info *info = g_conns[fd];
+    if (info == NULL)
+        return -1;
+
+    if (kvbuf_append(&info->sbuf, buf, len) != 0)
+        return -1;
+
+    /* recv 在途：只要入队就够。recv 的 CQE 处理完会自己提交 send */
+    if (info->event == EVENT_READ)
+        return 0;
+
+    /* send 在途：只要入队就够。它续发时会用 soff 带上新数据 */
+    if (info->event == EVENT_WRITE)
+        return 0;
+
+    /* 空闲（event == -1）：我来提交这次 send */
+    if (set_event_send(g_ring, info) != 0)
+        return -1;
+    return 0;
+}
+
+void kv_net_close(int fd)
+{
+    if (fd >= 0 && fd < CONN_SIZE && g_conns[fd] != NULL)
+        conn_close(g_conns[fd]);
+}
 int proactor_start(int port, PROTOCOL handler)
 {
 
@@ -154,7 +192,7 @@ int proactor_start(int port, PROTOCOL handler)
 
     struct io_uring ring;
     io_uring_queue_init_params(ENTRIES_LENGTH, &ring, &params);
-
+    g_ring = &ring;   
     // struct io_uring_sqe* sqe;
     // sqe=io_uring_get_sqe(&ring);
     //
@@ -209,6 +247,7 @@ int proactor_start(int port, PROTOCOL handler)
                     }
                     // info->event=EVENT_READ;
                     info->fd = res;
+                    g_conns[info->fd] = info; 
                     if (set_event_recv(&ring, info) != 0)
                     {
                         conn_close(info);
@@ -227,7 +266,7 @@ int proactor_start(int port, PROTOCOL handler)
                 if (res > 0) // res=实际读到的字节数
                 {
                     result->rbuf.len += res;
-                    if (kvbuf_process(&result->rbuf, &result->sbuf, g_protocol) != 0)
+                    if (kvbuf_process(&result->rbuf, &result->sbuf, g_protocol,result->fd) != 0)
                     {
                         conn_close(result);
                         continue;
@@ -281,8 +320,16 @@ int proactor_start(int port, PROTOCOL handler)
                         result->sbuf.len = 0;
                         result->soff = 0;
 
-                        if (set_event_recv(&ring, result) != 0)
+                         if (kv_repl_is_slave_fd(result->fd))
+                        {
+                            /* 从节点连接：只发不收。
+                               置 -1 = 空闲，等 kv_net_push 唤醒 */
+                            result->event = -1;
+                        }
+                        else if (set_event_recv(&ring, result) != 0)
+                        {
                             conn_close(result);
+                        }
                     }
                 }
             }
